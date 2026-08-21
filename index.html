@@ -9,9 +9,6 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
     </script>
     <style>
-        /* 样式与之前完全一致，此处省略（保持不变） */
-        /* 为节省篇幅，实际部署时请保留完整样式 */
-        /* 以下为简化占位，您可使用之前美化版的全部样式 */
         * {
             margin: 0;
             padding: 0;
@@ -139,6 +136,7 @@
             margin-bottom: 20px;
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 14px;
             color: #0f172a;
         }
@@ -153,11 +151,41 @@
             backdrop-filter: blur(4px);
             border: 1px solid #d1d9e6;
         }
+        .section-title .search-wrap {
+            flex: 1;
+            text-align: right;
+            min-width: 160px;
+        }
+        .section-title .search-wrap input {
+            padding: 6px 14px;
+            border-radius: 40px;
+            border: 1px solid #d1d9e6;
+            font-size: 14px;
+            width: 100%;
+            max-width: 260px;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(4px);
+            transition: border-color 0.2s;
+        }
+        .section-title .search-wrap input:focus {
+            outline: none;
+            border-color: #7c3aed;
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
         .project-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
             gap: 24px;
             margin-bottom: 48px;
+        }
+        .group-title {
+            grid-column: 1 / -1;
+            font-size: 18px;
+            font-weight: 700;
+            margin: 16px 0 8px 0;
+            color: #0f172a;
+            padding-left: 8px;
+            border-left: 4px solid #7c3aed;
         }
         .project-card {
             background: rgba(255, 255, 255, 0.85);
@@ -452,6 +480,16 @@
         .task-list-modal .modal {
             max-width: 680px;
         }
+        .task-group-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin: 12px 0 8px 0;
+            color: #1e293b;
+            padding: 6px 12px;
+            background: #e9edf2;
+            border-radius: 40px;
+            display: inline-block;
+        }
         .task-item {
             padding: 16px 20px;
             background: #f8fafc;
@@ -590,6 +628,14 @@
             }
             .section-title {
                 font-size: 19px;
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .section-title .search-wrap {
+                text-align: left;
+            }
+            .section-title .search-wrap input {
+                max-width: 100%;
             }
         }
         .loading {
@@ -632,14 +678,16 @@
             <h1>任务协作平台</h1>
             <div class="header-actions">
                 <button class="btn btn-primary" onclick="showModal('projectModal')">➕ 发布项目</button>
-                <!-- 移除了手动刷新按钮 -->
             </div>
         </header>
 
         <div>
             <div class="section-title">
-                📌 项目大屏
+                <span>📌 项目大屏</span>
                 <span class="badge" id="projectCount">0 个项目</span>
+                <div class="search-wrap">
+                    <input type="text" id="projectSearch" placeholder="🔍 搜索项目名称..." />
+                </div>
             </div>
             <div class="project-grid" id="projectGrid">
                 <div class="empty-state">
@@ -781,7 +829,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (实时同步版) -->
+    <!-- JavaScript (实时同步 + 分组排序 + 搜索) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
@@ -808,19 +856,17 @@
         }
 
         // ================================================================
-        //  2. 数据存储层 (支持实时监听)
+        //  2. 数据存储层
         // ================================================================
         const Store = {
             _localData: { projects: [], persons: [], tasks: [] },
-            _listeners: [], // 存储取消监听的函数
+            _listeners: [],
 
             init() {
                 this._loadLocal();
                 if (useFirebase) {
-                    // 开启实时监听
                     this._startRealtimeListeners();
                 } else {
-                    // 本地模式：确保有默认小人
                     this._ensureDefaultPersons();
                 }
             },
@@ -850,9 +896,7 @@
                 }
             },
 
-            // ---- 实时监听 (Firebase) ----
             _startRealtimeListeners() {
-                // 监听 projects
                 const unsubProjects = db.collection('projects').orderBy('createdAt', 'desc')
                     .onSnapshot(snapshot => {
                         const projects = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -861,7 +905,6 @@
                         if (App) App.onDataUpdate('projects', projects);
                     }, error => console.warn('Projects 监听错误', error));
 
-                // 监听 persons
                 const unsubPersons = db.collection('persons').orderBy('createdAt', 'asc')
                     .onSnapshot(snapshot => {
                         const persons = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -870,7 +913,6 @@
                         if (App) App.onDataUpdate('persons', persons);
                     }, error => console.warn('Persons 监听错误', error));
 
-                // 监听 tasks
                 const unsubTasks = db.collection('tasks').orderBy('createdAt', 'desc')
                     .onSnapshot(snapshot => {
                         const tasks = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -883,20 +925,16 @@
                 console.log('👂 实时监听已开启');
             },
 
-            // ---- 停止监听 (可选) ----
             detachListeners() {
                 this._listeners.forEach(unsub => unsub && unsub());
                 this._listeners = [];
             },
 
-            // ---- 同步写入 Firebase (同时更新本地) ----
             async _syncToFirebase(collection, action, data) {
                 if (!useFirebase) return;
                 try {
                     if (action === 'add') {
-                        // 添加时，数据中应不包含 id，由 Firestore 生成
-                        const ref = await db.collection(collection).add(data);
-                        // 本地已通过监听更新，无需额外操作
+                        await db.collection(collection).add(data);
                     } else if (action === 'update') {
                         await db.collection(collection).doc(data.id).update(data);
                     } else if (action === 'delete') {
@@ -907,26 +945,22 @@
                 }
             },
 
-            // ---- 公开接口 (乐观更新) ----
+            // ---- 乐观更新 ----
             async addProject(data) {
                 const payload = { ...data, createdAt: new Date().toISOString() };
-                // 立即更新本地
                 const id = 'p_' + Date.now();
                 const item = { id, ...payload };
                 this._localData.projects.unshift(item);
                 this._saveLocal();
-                // 异步同步到 Firebase (如果启用，监听会刷新)
                 this._syncToFirebase('projects', 'add', payload);
                 return item;
             },
-
             async deleteProject(id) {
                 this._localData.projects = this._localData.projects.filter(p => p.id !== id);
                 this._saveLocal();
                 this._syncToFirebase('projects', 'delete', { id });
                 return true;
             },
-
             async addPerson(data) {
                 const payload = { ...data, createdAt: new Date().toISOString() };
                 const id = 'per_' + Date.now();
@@ -936,7 +970,6 @@
                 this._syncToFirebase('persons', 'add', payload);
                 return item;
             },
-
             async updatePerson(id, data) {
                 const idx = this._localData.persons.findIndex(p => p.id === id);
                 if (idx !== -1) {
@@ -947,14 +980,12 @@
                 }
                 return false;
             },
-
             async deletePerson(id) {
                 this._localData.persons = this._localData.persons.filter(p => p.id !== id);
                 this._saveLocal();
                 this._syncToFirebase('persons', 'delete', { id });
                 return true;
             },
-
             async addTask(data) {
                 const payload = { ...data, status: '待完成', createdAt: new Date().toISOString() };
                 const id = 't_' + Date.now();
@@ -964,7 +995,6 @@
                 this._syncToFirebase('tasks', 'add', payload);
                 return item;
             },
-
             async updateTask(id, data) {
                 const idx = this._localData.tasks.findIndex(t => t.id === id);
                 if (idx !== -1) {
@@ -976,32 +1006,37 @@
                 return false;
             },
 
-            // ---- 读取数据 (直接返回本地缓存) ----
             getProjects() { return this._localData.projects || []; },
             getPersons() { return this._localData.persons || []; },
             getTasks() { return this._localData.tasks || []; }
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (响应数据变化)
+        //  3. 应用主逻辑 (新增搜索)
         // ================================================================
         const App = {
             projects: [],
             persons: [],
             tasks: [],
+            searchKeyword: '',
 
             init() {
                 Store.init();
-                // 从本地缓存读取初始数据
                 this.projects = Store.getProjects();
                 this.persons = Store.getPersons();
                 this.tasks = Store.getTasks();
                 this.renderAll();
-                // 每分钟刷新项目状态 (仅状态颜色)
                 setInterval(() => this.renderProjects(), 60000);
+
+                // 绑定搜索事件
+                const searchInput = document.getElementById('projectSearch');
+                searchInput.addEventListener('input', () => {
+                    this.searchKeyword = searchInput.value.trim();
+                    this.renderProjects();
+                    this.updateCounts();
+                });
             },
 
-            // ---- 数据更新回调 (由 Store 触发) ----
             onDataUpdate(collection, data) {
                 if (collection === 'projects') {
                     this.projects = data;
@@ -1009,22 +1044,15 @@
                     this.updateCounts();
                 } else if (collection === 'persons') {
                     this.persons = data;
-                    // 更新所有涉及人的 UI
                     this.renderPersonsAndSelects();
                     this.renderPersonManage();
                     this.updateCounts();
-                    // 如果任务清单打开，可能需要刷新
                     const modal = document.getElementById('taskListModal');
-                    if (modal.classList.contains('active')) {
-                        this.renderTaskList();
-                    }
+                    if (modal.classList.contains('active')) this.renderTaskList();
                 } else if (collection === 'tasks') {
                     this.tasks = data;
-                    // 如果任务清单打开，刷新
                     const modal = document.getElementById('taskListModal');
-                    if (modal.classList.contains('active')) {
-                        this.renderTaskList();
-                    }
+                    if (modal.classList.contains('active')) this.renderTaskList();
                 }
             },
 
@@ -1035,54 +1063,155 @@
                 this.updateCounts();
             },
 
+            // ---- 项目大屏：分组 + 排序 + 搜索 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
+                const keyword = this.searchKeyword.toLowerCase();
 
-                if (this.projects.length === 0) {
+                // 过滤
+                let filtered = this.projects;
+                if (keyword) {
+                    filtered = this.projects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
+                }
+
+                if (filtered.length === 0) {
                     grid.innerHTML = `
                         <div class="empty-state">
-                            <span class="emoji">📭</span>
-                            <p>暂无项目，点击「发布项目」创建第一个</p>
+                            <span class="emoji">🔍</span>
+                            <p>${keyword ? '未找到匹配的项目' : '暂无项目，点击「发布项目」创建第一个'}</p>
                         </div>
                     `;
+                    document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
                     return;
                 }
 
-                let html = '';
-                this.projects.forEach(p => {
+                // 分组
+                const groups = { pending: [], open: [], closed: [] };
+                filtered.forEach(p => {
                     const start = new Date(p.startDate);
                     const end = new Date(p.endDate);
-                    let status, statusClass;
+                    let status;
                     if (now < start) {
-                        status = '待申报';
-                        statusClass = 'status-pending';
+                        status = 'pending';
                     } else if (now >= start && now <= end) {
-                        status = '申报中';
-                        statusClass = 'status-open';
+                        status = 'open';
                     } else {
-                        status = '已截止';
-                        statusClass = 'status-closed';
+                        status = 'closed';
                     }
-
-                    html += `
-                        <div class="project-card">
-                            <div class="p-name">${this._escape(p.name)}</div>
-                            <div class="p-meta">
-                                <span>🕒 ${start.toLocaleString('zh-CN')}  ~  ${end.toLocaleString('zh-CN')}</span>
-                            </div>
-                            <div class="p-req">📌 ${this._escape(p.requirements || '无硬性要求')}</div>
-                            <span class="p-status ${statusClass}">${status}</span>
-                            <div class="p-actions">
-                                <button class="btn btn-danger btn-xs" onclick="App.deleteProject('${p.id}')">删除</button>
-                            </div>
-                        </div>
-                    `;
+                    groups[status].push({ ...p, _start: start, _end: end });
                 });
+
+                const sortByEnd = (a, b) => a._end - b._end;
+                groups.pending.sort(sortByEnd);
+                groups.open.sort(sortByEnd);
+                groups.closed.sort(sortByEnd);
+
+                const statusMap = {
+                    pending: { label: '📌 待申报', class: 'status-pending' },
+                    open: { label: '📌 申报中', class: 'status-open' },
+                    closed: { label: '📌 已截止', class: 'status-closed' }
+                };
+
+                let html = '';
+                ['pending', 'open', 'closed'].forEach(key => {
+                    const items = groups[key];
+                    if (items.length === 0) return;
+                    html += `<div class="group-title">${statusMap[key].label} (${items.length})</div>`;
+                    items.forEach(p => {
+                        const statusText = key === 'pending' ? '待申报' : key === 'open' ? '申报中' :
+                            '已截止';
+                        html += `
+                            <div class="project-card">
+                                <div class="p-name">${this._escape(p.name)}</div>
+                                <div class="p-meta">
+                                    <span>🕒 ${p._start.toLocaleString('zh-CN')}  ~  ${p._end.toLocaleString('zh-CN')}</span>
+                                </div>
+                                <div class="p-req">📌 ${this._escape(p.requirements || '无硬性要求')}</div>
+                                <span class="p-status ${statusMap[key].class}">${statusText}</span>
+                                <div class="p-actions">
+                                    <button class="btn btn-danger btn-xs" onclick="App.deleteProject('${p.id}')">删除</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                });
+
                 grid.innerHTML = html;
-                document.getElementById('projectCount').textContent = `${this.projects.length} 个项目`;
+                document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
             },
 
+            // ---- 任务清单：分组 + 排序 ----
+            renderTaskList() {
+                const sel = document.getElementById('taskListFilter');
+                const personId = sel.value;
+                const container = document.getElementById('taskListContainer');
+
+                if (!personId) {
+                    container.innerHTML =
+                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">请选择一位小人查看任务</p>`;
+                    return;
+                }
+
+                const person = this.persons.find(p => p.id === personId);
+                if (!person) {
+                    container.innerHTML = `<p style="color:#94a3b8;text-align:center;padding:30px 0;">该小人不存在</p>`;
+                    return;
+                }
+
+                const tasks = this.tasks.filter(t => t.toPersonId === personId);
+                if (tasks.length === 0) {
+                    container.innerHTML =
+                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.name)} 暂无任务</p>`;
+                    return;
+                }
+
+                const pending = tasks.filter(t => t.status !== '已完成');
+                const done = tasks.filter(t => t.status === '已完成');
+
+                pending.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+                done.sort((a, b) => new Date(b.deadline) - new Date(a.deadline));
+
+                const renderItems = (items, title, emoji) => {
+                    if (items.length === 0) return '';
+                    let html = `<div style="margin-top:16px;"><span class="task-group-title">${emoji} ${title} (${items.length})</span></div>`;
+                    items.forEach(t => {
+                        const from = this.persons.find(p => p.id === t.fromPersonId);
+                        const fromName = from ? from.name : '已删除';
+                        const deadline = new Date(t.deadline).toLocaleString('zh-CN');
+                        const isDone = t.status === '已完成';
+                        const detailId = 'taskDetail_' + t.id;
+
+                        html += `
+                            <div class="task-item" onclick="App.toggleTaskDetail('${detailId}')">
+                                <div class="task-head">
+                                    <span class="task-from">📤 ${this._escape(fromName)}</span>
+                                    <span class="task-deadline">⏰ ${deadline}</span>
+                                    <span class="task-status-badge ${isDone ? 'done' : ''}">${isDone ? '✅ 已完成' : '⏳ 待完成'}</span>
+                                </div>
+                                <div class="task-content">${this._escape(t.content)}</div>
+                                <div class="task-detail-popup" id="${detailId}">
+                                    <div><span class="label">发布者：</span>${this._escape(fromName)}</div>
+                                    <div><span class="label">内容：</span>${this._escape(t.content)}</div>
+                                    <div><span class="label">时限：</span>${deadline}</div>
+                                    <div style="margin-top:10px;display:flex;gap:10px;">
+                                        ${!isDone ? `<button class="btn btn-success btn-xs" onclick="event.stopPropagation();App.completeTask('${t.id}')">✅ 标记完成</button>` : ''}
+                                        <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();App.deleteTask('${t.id}')">🗑️ 删除</button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    return html;
+                };
+
+                let html = `<div style="margin-bottom:8px;font-weight:700;font-size:18px;">🧑 ${this._escape(person.name)} 的任务</div>`;
+                html += renderItems(pending, '未完成', '⏳');
+                html += renderItems(done, '已完成', '✅');
+                container.innerHTML = html;
+            },
+
+            // ---- 其余辅助函数 ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1150,7 +1279,12 @@
             },
 
             updateCounts() {
-                document.getElementById('projectCount').textContent = `${this.projects.length} 个项目`;
+                const keyword = this.searchKeyword.toLowerCase();
+                let count = this.projects;
+                if (keyword) {
+                    count = this.projects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
+                }
+                document.getElementById('projectCount').textContent = `${count.length} 个项目`;
                 document.getElementById('小人Count').textContent = this.persons.length;
             },
 
@@ -1161,7 +1295,7 @@
                 return div.innerHTML;
             },
 
-            // ---- 业务操作 (乐观更新) ----
+            // ---- 业务操作 ----
             async submitProject(e) {
                 e.preventDefault();
                 const name = document.getElementById('pName').value.trim();
@@ -1180,7 +1314,6 @@
 
                 try {
                     await Store.addProject({ name, startDate, endDate, requirements });
-                    // 数据已通过乐观更新 + 监听刷新，无需手动渲染
                     hideModal('projectModal');
                     document.getElementById('projectForm').reset();
                     toast('✅ 项目发布成功！', 'success');
@@ -1291,62 +1424,6 @@
                 this.renderTaskList();
             },
 
-            renderTaskList() {
-                const sel = document.getElementById('taskListFilter');
-                const personId = sel.value;
-                const container = document.getElementById('taskListContainer');
-
-                if (!personId) {
-                    container.innerHTML =
-                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">请选择一位小人查看任务</p>`;
-                    return;
-                }
-
-                const person = this.persons.find(p => p.id === personId);
-                if (!person) {
-                    container.innerHTML = `<p style="color:#94a3b8;text-align:center;padding:30px 0;">该小人不存在</p>`;
-                    return;
-                }
-
-                const tasks = this.tasks.filter(t => t.toPersonId === personId);
-                if (tasks.length === 0) {
-                    container.innerHTML =
-                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.name)} 暂无任务</p>`;
-                    return;
-                }
-
-                let html =
-                    `<div style="margin-bottom:16px;font-weight:700;font-size:18px;">🧑 ${this._escape(person.name)} 的任务 (${tasks.length})</div>`;
-                tasks.forEach(t => {
-                    const from = this.persons.find(p => p.id === t.fromPersonId);
-                    const fromName = from ? from.name : '已删除';
-                    const deadline = new Date(t.deadline).toLocaleString('zh-CN');
-                    const isDone = t.status === '已完成';
-                    const detailId = 'taskDetail_' + t.id;
-
-                    html += `
-                        <div class="task-item" onclick="App.toggleTaskDetail('${detailId}')">
-                            <div class="task-head">
-                                <span class="task-from">📤 ${this._escape(fromName)}</span>
-                                <span class="task-deadline">⏰ ${deadline}</span>
-                                <span class="task-status-badge ${isDone ? 'done' : ''}">${isDone ? '✅ 已完成' : '⏳ 待完成'}</span>
-                            </div>
-                            <div class="task-content">${this._escape(t.content)}</div>
-                            <div class="task-detail-popup" id="${detailId}">
-                                <div><span class="label">发布者：</span>${this._escape(fromName)}</div>
-                                <div><span class="label">内容：</span>${this._escape(t.content)}</div>
-                                <div><span class="label">时限：</span>${deadline}</div>
-                                <div style="margin-top:10px;display:flex;gap:10px;">
-                                    ${!isDone ? `<button class="btn btn-success btn-xs" onclick="event.stopPropagation();App.completeTask('${t.id}')">✅ 标记完成</button>` : ''}
-                                    <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();App.deleteTask('${t.id}')">🗑️ 删除</button>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                });
-                container.innerHTML = html;
-            },
-
             toggleTaskDetail(id) {
                 const el = document.getElementById(id);
                 if (el) el.classList.toggle('open');
@@ -1409,7 +1486,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（实时同步版）');
+        console.log('🚀 任务平台已启动（搜索版）');
     </script>
 </body>
 </html>
