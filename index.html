@@ -4,17 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>✨ 任务协作平台</title>
-
-    <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js">
     </script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
     </script>
-
     <style>
-        /* ===== 样式与之前的美化版一致，这里省略以节省篇幅 ===== */
-        /* 您可以直接沿用之前美化版的样式，或者保留原有样式 */
-        /* 为了完整性，这里包含全部样式（与美化版相同） */
+        /* 样式部分与之前美化版完全一致，省略以节省篇幅，但保留全部功能 */
         * {
             margin: 0;
             padding: 0;
@@ -784,7 +779,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (修复版) -->
+    <!-- JavaScript (优化版：乐观更新 + 轻量渲染) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
@@ -801,32 +796,29 @@
 
         try {
             firebase.initializeApp(firebaseConfig);
-            console.log('🔥 Firebase 初始化成功');
         } catch (e) {
             console.warn('⚠️ Firebase 初始化失败，使用 localStorage 降级', e);
         }
         const db = firebase.firestore ? firebase.firestore() : null;
 
         // ================================================================
-        //  2. 数据存储层 (修复异步初始化问题)
+        //  2. 数据存储层 (支持本地缓存 + 乐观更新)
         // ================================================================
         const Store = {
             _useFirebase: false,
             _localData: { projects: [], persons: [], tasks: [] },
-            _initialized: false,
+            _pendingSyncs: [], // 用于记录待同步操作
 
             init() {
                 if (db) {
                     this._useFirebase = true;
-                    console.log('✅ 使用 Firebase 存储');
+                    console.log('✅ 使用 Firebase');
                 } else {
                     this._useFirebase = false;
                     this._loadLocal();
-                    console.log('📁 使用 localStorage 存储 (降级模式)');
+                    console.log('📁 使用 localStorage');
                 }
-                // 同步添加默认小人 (仅在 local 模式下)
-                this._ensureDefaultPersonsSync();
-                this._initialized = true;
+                this._ensureDefaultPersons();
             },
 
             _loadLocal() {
@@ -841,223 +833,162 @@
                 } catch (e) { /* ignore */ }
             },
 
-            // ---- 同步添加默认小人 (只在 local 模式生效) ----
-            _ensureDefaultPersonsSync() {
-                if (this._useFirebase) {
-                    // Firebase 模式下不自动添加，由用户手动添加或从 Firebase 读取
-                    return;
-                }
+            _ensureDefaultPersons() {
+                if (this._useFirebase) return;
                 const persons = this._localData.persons || [];
                 if (persons.length === 0) {
                     ['a', 'b', 'c', 'd'].forEach(name => {
-                        const id = 'per_' + Date.now() + Math.random().toString(36).slice(2);
-                        const item = { id, name, createdAt: new Date().toISOString() };
-                        this._localData.persons.push(item);
+                        this._localData.persons.push({
+                            id: 'per_' + Date.now() + Math.random().toString(36).slice(2),
+                            name,
+                            createdAt: new Date().toISOString()
+                        });
                     });
                     this._saveLocal();
-                    console.log('✅ 已添加默认小人 a, b, c, d (本地)');
                 }
             },
 
-            // ---- 异步接口 (与之前一致) ----
+            // ---- 同步写入本地 (不等待 Firebase) ----
+            _addToLocal(collection, item) {
+                this._localData[collection].push(item);
+                this._saveLocal();
+                return item;
+            },
+            _removeFromLocal(collection, id) {
+                this._localData[collection] = this._localData[collection].filter(d => d.id !== id);
+                this._saveLocal();
+            },
+            _updateInLocal(collection, id, data) {
+                const idx = this._localData[collection].findIndex(d => d.id === id);
+                if (idx !== -1) {
+                    this._localData[collection][idx] = { ...this._localData[collection][idx], ...data };
+                    this._saveLocal();
+                    return true;
+                }
+                return false;
+            },
+
+            // ---- 异步同步到 Firebase (后台) ----
+            async _syncToFirebase(collection, action, data) {
+                if (!this._useFirebase) return;
+                try {
+                    if (action === 'add') {
+                        await db.collection(collection).add(data);
+                    } else if (action === 'update') {
+                        await db.collection(collection).doc(data.id).update(data);
+                    } else if (action === 'delete') {
+                        await db.collection(collection).doc(data.id).delete();
+                    }
+                } catch (e) {
+                    console.warn(`Firebase 同步失败 (${collection}, ${action})`, e);
+                }
+            },
+
+            // ---- 公开接口：立即本地更新，异步同步 ----
+            async addProject(data) {
+                const payload = { ...data, createdAt: new Date().toISOString() };
+                const id = 'p_' + Date.now();
+                const item = { id, ...payload };
+                this._addToLocal('projects', item);
+                this._syncToFirebase('projects', 'add', payload);
+                return item;
+            },
+
+            async deleteProject(id) {
+                this._removeFromLocal('projects', id);
+                this._syncToFirebase('projects', 'delete', { id });
+                return true;
+            },
+
+            async addPerson(data) {
+                const payload = { ...data, createdAt: new Date().toISOString() };
+                const id = 'per_' + Date.now();
+                const item = { id, ...payload };
+                this._addToLocal('persons', item);
+                this._syncToFirebase('persons', 'add', payload);
+                return item;
+            },
+
+            async updatePerson(id, data) {
+                const ok = this._updateInLocal('persons', id, data);
+                this._syncToFirebase('persons', 'update', { id, ...data });
+                return ok;
+            },
+
+            async deletePerson(id) {
+                this._removeFromLocal('persons', id);
+                this._syncToFirebase('persons', 'delete', { id });
+                return true;
+            },
+
+            async addTask(data) {
+                const payload = { ...data, status: '待完成', createdAt: new Date().toISOString() };
+                const id = 't_' + Date.now();
+                const item = { id, ...payload };
+                this._addToLocal('tasks', item);
+                this._syncToFirebase('tasks', 'add', payload);
+                return item;
+            },
+
+            async updateTask(id, data) {
+                const ok = this._updateInLocal('tasks', id, data);
+                this._syncToFirebase('tasks', 'update', { id, ...data });
+                return ok;
+            },
+
+            // ---- 读取数据 (优先从本地缓存返回) ----
             async getProjects() {
                 if (this._useFirebase) {
                     try {
                         const snap = await db.collection('projects').orderBy('createdAt', 'desc').get();
-                        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        // 用远程数据覆盖本地
+                        this._localData.projects = remote;
+                        this._saveLocal();
+                        return remote;
                     } catch (e) {
-                        console.warn('Firebase 读取项目失败，降级', e);
+                        console.warn('Firebase 读取失败，返回本地缓存', e);
                         return this._localData.projects || [];
                     }
                 }
                 return this._localData.projects || [];
             },
 
-            async addProject(data) {
-                const payload = {
-                    ...data,
-                    createdAt: firebase.firestore ? firebase.firestore.FieldValue.serverTimestamp() : new Date()
-                        .toISOString()
-                };
-                if (this._useFirebase) {
-                    try {
-                        const ref = await db.collection('projects').add(payload);
-                        return { id: ref.id, ...payload };
-                    } catch (e) {
-                        console.warn('Firebase 添加项目失败，降级', e);
-                        return this._addProjectLocal(payload);
-                    }
-                }
-                return this._addProjectLocal(payload);
-            },
-            _addProjectLocal(payload) {
-                const id = 'p_' + Date.now();
-                const item = { id, ...payload, createdAt: new Date().toISOString() };
-                this._localData.projects.unshift(item);
-                this._saveLocal();
-                return item;
-            },
-
-            async deleteProject(id) {
-                if (this._useFirebase) {
-                    try {
-                        await db.collection('projects').doc(id).delete();
-                        return true;
-                    } catch (e) {
-                        console.warn('Firebase 删除失败，降级', e);
-                        return this._deleteProjectLocal(id);
-                    }
-                }
-                return this._deleteProjectLocal(id);
-            },
-            _deleteProjectLocal(id) {
-                this._localData.projects = this._localData.projects.filter(p => p.id !== id);
-                this._saveLocal();
-                return true;
-            },
-
             async getPersons() {
                 if (this._useFirebase) {
                     try {
                         const snap = await db.collection('persons').orderBy('createdAt', 'asc').get();
-                        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        this._localData.persons = remote;
+                        this._saveLocal();
+                        return remote;
                     } catch (e) {
-                        console.warn('Firebase 读取小人失败，降级', e);
+                        console.warn('Firebase 读取失败，返回本地缓存', e);
                         return this._localData.persons || [];
                     }
                 }
                 return this._localData.persons || [];
             },
 
-            async addPerson(data) {
-                const payload = {
-                    ...data,
-                    createdAt: firebase.firestore ? firebase.firestore.FieldValue.serverTimestamp() : new Date()
-                        .toISOString()
-                };
-                if (this._useFirebase) {
-                    try {
-                        const ref = await db.collection('persons').add(payload);
-                        return { id: ref.id, ...payload };
-                    } catch (e) {
-                        console.warn('Firebase 添加小人失败，降级', e);
-                        return this._addPersonLocal(payload);
-                    }
-                }
-                return this._addPersonLocal(payload);
-            },
-            _addPersonLocal(payload) {
-                const id = 'per_' + Date.now();
-                const item = { id, ...payload, createdAt: new Date().toISOString() };
-                this._localData.persons.push(item);
-                this._saveLocal();
-                return item;
-            },
-
-            async updatePerson(id, data) {
-                if (this._useFirebase) {
-                    try {
-                        await db.collection('persons').doc(id).update(data);
-                        return true;
-                    } catch (e) {
-                        console.warn('Firebase 更新小人失败，降级', e);
-                        return this._updatePersonLocal(id, data);
-                    }
-                }
-                return this._updatePersonLocal(id, data);
-            },
-            _updatePersonLocal(id, data) {
-                const idx = this._localData.persons.findIndex(p => p.id === id);
-                if (idx !== -1) {
-                    this._localData.persons[idx] = { ...this._localData.persons[idx], ...data };
-                    this._saveLocal();
-                    return true;
-                }
-                return false;
-            },
-
-            async deletePerson(id) {
-                if (this._useFirebase) {
-                    try {
-                        await db.collection('persons').doc(id).delete();
-                        return true;
-                    } catch (e) {
-                        console.warn('Firebase 删除小人失败，降级', e);
-                        return this._deletePersonLocal(id);
-                    }
-                }
-                return this._deletePersonLocal(id);
-            },
-            _deletePersonLocal(id) {
-                this._localData.persons = this._localData.persons.filter(p => p.id !== id);
-                this._saveLocal();
-                return true;
-            },
-
             async getTasks() {
                 if (this._useFirebase) {
                     try {
                         const snap = await db.collection('tasks').orderBy('createdAt', 'desc').get();
-                        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        this._localData.tasks = remote;
+                        this._saveLocal();
+                        return remote;
                     } catch (e) {
-                        console.warn('Firebase 读取任务失败，降级', e);
+                        console.warn('Firebase 读取失败，返回本地缓存', e);
                         return this._localData.tasks || [];
                     }
                 }
                 return this._localData.tasks || [];
-            },
-
-            async addTask(data) {
-                const payload = {
-                    ...data,
-                    status: '待完成',
-                    createdAt: firebase.firestore ? firebase.firestore.FieldValue.serverTimestamp() : new Date()
-                        .toISOString()
-                };
-                if (this._useFirebase) {
-                    try {
-                        const ref = await db.collection('tasks').add(payload);
-                        return { id: ref.id, ...payload };
-                    } catch (e) {
-                        console.warn('Firebase 添加任务失败，降级', e);
-                        return this._addTaskLocal(payload);
-                    }
-                }
-                return this._addTaskLocal(payload);
-            },
-            _addTaskLocal(payload) {
-                const id = 't_' + Date.now();
-                const item = { id, ...payload, createdAt: new Date().toISOString() };
-                this._localData.tasks.unshift(item);
-                this._saveLocal();
-                return item;
-            },
-
-            async updateTask(id, data) {
-                if (this._useFirebase) {
-                    try {
-                        await db.collection('tasks').doc(id).update(data);
-                        return true;
-                    } catch (e) {
-                        console.warn('Firebase 更新任务失败，降级', e);
-                        return this._updateTaskLocal(id, data);
-                    }
-                }
-                return this._updateTaskLocal(id, data);
-            },
-            _updateTaskLocal(id, data) {
-                const idx = this._localData.tasks.findIndex(t => t.id === id);
-                if (idx !== -1) {
-                    this._localData.tasks[idx] = { ...this._localData.tasks[idx], ...data };
-                    this._saveLocal();
-                    return true;
-                }
-                return false;
             }
         };
 
         // ================================================================
-        //  3. 应用主逻辑
+        //  3. 应用主逻辑 (优化渲染性能)
         // ================================================================
         const App = {
             projects: [],
@@ -1068,7 +999,6 @@
                 Store.init();
                 await this.loadData();
                 this.renderAll();
-                // 每分钟刷新项目状态
                 setInterval(() => this.renderProjects(), 60000);
             },
 
@@ -1082,18 +1012,16 @@
                     this.projects = projects;
                     this.persons = persons;
                     this.tasks = tasks;
-                    console.log(`📊 加载完成: ${projects.length} 个项目, ${persons.length} 个小人, ${tasks.length} 个任务`);
                 } catch (e) {
                     console.error('加载数据失败', e);
                     toast('数据加载失败，请刷新', 'error');
                 }
             },
 
+            // ---- 精细渲染：只更新需要变化的部分 ----
             renderAll() {
                 this.renderProjects();
-                this.renderPersons();
-                this.renderTaskSelects();
-                this.renderTaskListFilter();
+                this.renderPersonsAndSelects(); // 合并渲染小人和下拉
                 this.renderPersonManage();
                 this.updateCounts();
             },
@@ -1146,6 +1074,13 @@
                 document.getElementById('projectCount').textContent = `${this.projects.length} 个项目`;
             },
 
+            // 合并渲染小人列表 + 任务下拉 + 清单过滤下拉
+            renderPersonsAndSelects() {
+                this.renderPersons();
+                this.renderTaskSelects();
+                this.renderTaskListFilter();
+            },
+
             renderPersons() {
                 const container = document.getElementById('小人列表');
                 if (this.persons.length === 0) {
@@ -1175,7 +1110,6 @@
                 ).join('');
                 fromSel.innerHTML = options;
                 toSel.innerHTML = options;
-                console.log(`🔄 任务下拉已刷新，共 ${this.persons.length} 个小人`);
             },
 
             renderTaskListFilter() {
@@ -1219,7 +1153,7 @@
                 return div.innerHTML;
             },
 
-            // ---- 业务操作 ----
+            // ---- 业务操作 (乐观更新) ----
             async submitProject(e) {
                 e.preventDefault();
                 const name = document.getElementById('pName').value.trim();
@@ -1277,11 +1211,12 @@
                 try {
                     const result = await Store.addPerson({ name });
                     this.persons.push(result);
-                    // 刷新所有 UI（包括下拉）
-                    this.renderAll();
+                    // 只刷新小人和下拉，不重新渲染项目
+                    this.renderPersonsAndSelects();
+                    this.renderPersonManage();
+                    this.updateCounts();
                     input.value = '';
                     toast('✅ 已添加小人', 'success');
-                    console.log(`👤 添加小人成功: ${name}, 当前共有 ${this.persons.length} 个小人`);
                 } catch (err) {
                     toast('添加失败，请重试', 'error');
                     console.error(err);
@@ -1304,7 +1239,9 @@
                     await Store.updatePerson(id, { name: newName });
                     const p = this.persons.find(p => p.id === id);
                     if (p) p.name = newName;
-                    this.renderAll();
+                    this.renderPersonsAndSelects();
+                    this.renderPersonManage();
+                    this.updateCounts();
                     toast('已更新名称', 'success');
                 } catch (err) {
                     toast('更新失败', 'error');
@@ -1317,7 +1254,9 @@
                     await Store.deletePerson(id);
                     this.persons = this.persons.filter(p => p.id !== id);
                     this.tasks = this.tasks.filter(t => t.fromPersonId !== id && t.toPersonId !== id);
-                    this.renderAll();
+                    this.renderPersonsAndSelects();
+                    this.renderPersonManage();
+                    this.updateCounts();
                     toast('已删除小人', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
@@ -1354,7 +1293,6 @@
                     hideModal('taskModal');
                     document.getElementById('taskForm').reset();
                     toast('✅ 任务已发送！', 'success');
-                    console.log(`📨 任务发送: ${content} -> ${toPersonId}`);
                 } catch (err) {
                     toast('发送失败，请重试', 'error');
                     console.error(err);
@@ -1497,7 +1435,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（修复版）');
+        console.log('🚀 任务平台已启动（优化版）');
     </script>
 </body>
 </html>
