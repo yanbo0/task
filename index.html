@@ -9,7 +9,9 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
     </script>
     <style>
-        /* 样式部分与之前美化版完全一致，省略以节省篇幅，但保留全部功能 */
+        /* 样式与之前完全一致，此处省略（保持不变） */
+        /* 为节省篇幅，实际部署时请保留完整样式 */
+        /* 以下为简化占位，您可使用之前美化版的全部样式 */
         * {
             margin: 0;
             padding: 0;
@@ -630,7 +632,7 @@
             <h1>任务协作平台</h1>
             <div class="header-actions">
                 <button class="btn btn-primary" onclick="showModal('projectModal')">➕ 发布项目</button>
-                <button class="btn btn-outline" onclick="App.refreshData()">🔄 刷新</button>
+                <!-- 移除了手动刷新按钮 -->
             </div>
         </header>
 
@@ -779,7 +781,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (优化版：乐观更新 + 轻量渲染) -->
+    <!-- JavaScript (实时同步版) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
@@ -794,31 +796,33 @@
             appId: "1:123456789012:web:abcdef123456"
         };
 
+        let useFirebase = false;
+        let db = null;
         try {
             firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+            useFirebase = true;
+            console.log('✅ Firebase 已初始化');
         } catch (e) {
             console.warn('⚠️ Firebase 初始化失败，使用 localStorage 降级', e);
         }
-        const db = firebase.firestore ? firebase.firestore() : null;
 
         // ================================================================
-        //  2. 数据存储层 (支持本地缓存 + 乐观更新)
+        //  2. 数据存储层 (支持实时监听)
         // ================================================================
         const Store = {
-            _useFirebase: false,
             _localData: { projects: [], persons: [], tasks: [] },
-            _pendingSyncs: [], // 用于记录待同步操作
+            _listeners: [], // 存储取消监听的函数
 
             init() {
-                if (db) {
-                    this._useFirebase = true;
-                    console.log('✅ 使用 Firebase');
+                this._loadLocal();
+                if (useFirebase) {
+                    // 开启实时监听
+                    this._startRealtimeListeners();
                 } else {
-                    this._useFirebase = false;
-                    this._loadLocal();
-                    console.log('📁 使用 localStorage');
+                    // 本地模式：确保有默认小人
+                    this._ensureDefaultPersons();
                 }
-                this._ensureDefaultPersons();
             },
 
             _loadLocal() {
@@ -834,9 +838,7 @@
             },
 
             _ensureDefaultPersons() {
-                if (this._useFirebase) return;
-                const persons = this._localData.persons || [];
-                if (persons.length === 0) {
+                if (this._localData.persons.length === 0) {
                     ['a', 'b', 'c', 'd'].forEach(name => {
                         this._localData.persons.push({
                             id: 'per_' + Date.now() + Math.random().toString(36).slice(2),
@@ -848,32 +850,53 @@
                 }
             },
 
-            // ---- 同步写入本地 (不等待 Firebase) ----
-            _addToLocal(collection, item) {
-                this._localData[collection].push(item);
-                this._saveLocal();
-                return item;
-            },
-            _removeFromLocal(collection, id) {
-                this._localData[collection] = this._localData[collection].filter(d => d.id !== id);
-                this._saveLocal();
-            },
-            _updateInLocal(collection, id, data) {
-                const idx = this._localData[collection].findIndex(d => d.id === id);
-                if (idx !== -1) {
-                    this._localData[collection][idx] = { ...this._localData[collection][idx], ...data };
-                    this._saveLocal();
-                    return true;
-                }
-                return false;
+            // ---- 实时监听 (Firebase) ----
+            _startRealtimeListeners() {
+                // 监听 projects
+                const unsubProjects = db.collection('projects').orderBy('createdAt', 'desc')
+                    .onSnapshot(snapshot => {
+                        const projects = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                        this._localData.projects = projects;
+                        this._saveLocal();
+                        if (App) App.onDataUpdate('projects', projects);
+                    }, error => console.warn('Projects 监听错误', error));
+
+                // 监听 persons
+                const unsubPersons = db.collection('persons').orderBy('createdAt', 'asc')
+                    .onSnapshot(snapshot => {
+                        const persons = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                        this._localData.persons = persons;
+                        this._saveLocal();
+                        if (App) App.onDataUpdate('persons', persons);
+                    }, error => console.warn('Persons 监听错误', error));
+
+                // 监听 tasks
+                const unsubTasks = db.collection('tasks').orderBy('createdAt', 'desc')
+                    .onSnapshot(snapshot => {
+                        const tasks = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                        this._localData.tasks = tasks;
+                        this._saveLocal();
+                        if (App) App.onDataUpdate('tasks', tasks);
+                    }, error => console.warn('Tasks 监听错误', error));
+
+                this._listeners = [unsubProjects, unsubPersons, unsubTasks];
+                console.log('👂 实时监听已开启');
             },
 
-            // ---- 异步同步到 Firebase (后台) ----
+            // ---- 停止监听 (可选) ----
+            detachListeners() {
+                this._listeners.forEach(unsub => unsub && unsub());
+                this._listeners = [];
+            },
+
+            // ---- 同步写入 Firebase (同时更新本地) ----
             async _syncToFirebase(collection, action, data) {
-                if (!this._useFirebase) return;
+                if (!useFirebase) return;
                 try {
                     if (action === 'add') {
-                        await db.collection(collection).add(data);
+                        // 添加时，数据中应不包含 id，由 Firestore 生成
+                        const ref = await db.collection(collection).add(data);
+                        // 本地已通过监听更新，无需额外操作
                     } else if (action === 'update') {
                         await db.collection(collection).doc(data.id).update(data);
                     } else if (action === 'delete') {
@@ -884,18 +907,22 @@
                 }
             },
 
-            // ---- 公开接口：立即本地更新，异步同步 ----
+            // ---- 公开接口 (乐观更新) ----
             async addProject(data) {
                 const payload = { ...data, createdAt: new Date().toISOString() };
+                // 立即更新本地
                 const id = 'p_' + Date.now();
                 const item = { id, ...payload };
-                this._addToLocal('projects', item);
+                this._localData.projects.unshift(item);
+                this._saveLocal();
+                // 异步同步到 Firebase (如果启用，监听会刷新)
                 this._syncToFirebase('projects', 'add', payload);
                 return item;
             },
 
             async deleteProject(id) {
-                this._removeFromLocal('projects', id);
+                this._localData.projects = this._localData.projects.filter(p => p.id !== id);
+                this._saveLocal();
                 this._syncToFirebase('projects', 'delete', { id });
                 return true;
             },
@@ -904,19 +931,26 @@
                 const payload = { ...data, createdAt: new Date().toISOString() };
                 const id = 'per_' + Date.now();
                 const item = { id, ...payload };
-                this._addToLocal('persons', item);
+                this._localData.persons.push(item);
+                this._saveLocal();
                 this._syncToFirebase('persons', 'add', payload);
                 return item;
             },
 
             async updatePerson(id, data) {
-                const ok = this._updateInLocal('persons', id, data);
-                this._syncToFirebase('persons', 'update', { id, ...data });
-                return ok;
+                const idx = this._localData.persons.findIndex(p => p.id === id);
+                if (idx !== -1) {
+                    this._localData.persons[idx] = { ...this._localData.persons[idx], ...data };
+                    this._saveLocal();
+                    this._syncToFirebase('persons', 'update', { id, ...data });
+                    return true;
+                }
+                return false;
             },
 
             async deletePerson(id) {
-                this._removeFromLocal('persons', id);
+                this._localData.persons = this._localData.persons.filter(p => p.id !== id);
+                this._saveLocal();
                 this._syncToFirebase('persons', 'delete', { id });
                 return true;
             },
@@ -925,103 +959,78 @@
                 const payload = { ...data, status: '待完成', createdAt: new Date().toISOString() };
                 const id = 't_' + Date.now();
                 const item = { id, ...payload };
-                this._addToLocal('tasks', item);
+                this._localData.tasks.unshift(item);
+                this._saveLocal();
                 this._syncToFirebase('tasks', 'add', payload);
                 return item;
             },
 
             async updateTask(id, data) {
-                const ok = this._updateInLocal('tasks', id, data);
-                this._syncToFirebase('tasks', 'update', { id, ...data });
-                return ok;
+                const idx = this._localData.tasks.findIndex(t => t.id === id);
+                if (idx !== -1) {
+                    this._localData.tasks[idx] = { ...this._localData.tasks[idx], ...data };
+                    this._saveLocal();
+                    this._syncToFirebase('tasks', 'update', { id, ...data });
+                    return true;
+                }
+                return false;
             },
 
-            // ---- 读取数据 (优先从本地缓存返回) ----
-            async getProjects() {
-                if (this._useFirebase) {
-                    try {
-                        const snap = await db.collection('projects').orderBy('createdAt', 'desc').get();
-                        const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        // 用远程数据覆盖本地
-                        this._localData.projects = remote;
-                        this._saveLocal();
-                        return remote;
-                    } catch (e) {
-                        console.warn('Firebase 读取失败，返回本地缓存', e);
-                        return this._localData.projects || [];
-                    }
-                }
-                return this._localData.projects || [];
-            },
-
-            async getPersons() {
-                if (this._useFirebase) {
-                    try {
-                        const snap = await db.collection('persons').orderBy('createdAt', 'asc').get();
-                        const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        this._localData.persons = remote;
-                        this._saveLocal();
-                        return remote;
-                    } catch (e) {
-                        console.warn('Firebase 读取失败，返回本地缓存', e);
-                        return this._localData.persons || [];
-                    }
-                }
-                return this._localData.persons || [];
-            },
-
-            async getTasks() {
-                if (this._useFirebase) {
-                    try {
-                        const snap = await db.collection('tasks').orderBy('createdAt', 'desc').get();
-                        const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        this._localData.tasks = remote;
-                        this._saveLocal();
-                        return remote;
-                    } catch (e) {
-                        console.warn('Firebase 读取失败，返回本地缓存', e);
-                        return this._localData.tasks || [];
-                    }
-                }
-                return this._localData.tasks || [];
-            }
+            // ---- 读取数据 (直接返回本地缓存) ----
+            getProjects() { return this._localData.projects || []; },
+            getPersons() { return this._localData.persons || []; },
+            getTasks() { return this._localData.tasks || []; }
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (优化渲染性能)
+        //  3. 应用主逻辑 (响应数据变化)
         // ================================================================
         const App = {
             projects: [],
             persons: [],
             tasks: [],
 
-            async init() {
+            init() {
                 Store.init();
-                await this.loadData();
+                // 从本地缓存读取初始数据
+                this.projects = Store.getProjects();
+                this.persons = Store.getPersons();
+                this.tasks = Store.getTasks();
                 this.renderAll();
+                // 每分钟刷新项目状态 (仅状态颜色)
                 setInterval(() => this.renderProjects(), 60000);
             },
 
-            async loadData() {
-                try {
-                    const [projects, persons, tasks] = await Promise.all([
-                        Store.getProjects(),
-                        Store.getPersons(),
-                        Store.getTasks()
-                    ]);
-                    this.projects = projects;
-                    this.persons = persons;
-                    this.tasks = tasks;
-                } catch (e) {
-                    console.error('加载数据失败', e);
-                    toast('数据加载失败，请刷新', 'error');
+            // ---- 数据更新回调 (由 Store 触发) ----
+            onDataUpdate(collection, data) {
+                if (collection === 'projects') {
+                    this.projects = data;
+                    this.renderProjects();
+                    this.updateCounts();
+                } else if (collection === 'persons') {
+                    this.persons = data;
+                    // 更新所有涉及人的 UI
+                    this.renderPersonsAndSelects();
+                    this.renderPersonManage();
+                    this.updateCounts();
+                    // 如果任务清单打开，可能需要刷新
+                    const modal = document.getElementById('taskListModal');
+                    if (modal.classList.contains('active')) {
+                        this.renderTaskList();
+                    }
+                } else if (collection === 'tasks') {
+                    this.tasks = data;
+                    // 如果任务清单打开，刷新
+                    const modal = document.getElementById('taskListModal');
+                    if (modal.classList.contains('active')) {
+                        this.renderTaskList();
+                    }
                 }
             },
 
-            // ---- 精细渲染：只更新需要变化的部分 ----
             renderAll() {
                 this.renderProjects();
-                this.renderPersonsAndSelects(); // 合并渲染小人和下拉
+                this.renderPersonsAndSelects();
                 this.renderPersonManage();
                 this.updateCounts();
             },
@@ -1074,7 +1083,6 @@
                 document.getElementById('projectCount').textContent = `${this.projects.length} 个项目`;
             },
 
-            // 合并渲染小人列表 + 任务下拉 + 清单过滤下拉
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1171,10 +1179,8 @@
                 }
 
                 try {
-                    const result = await Store.addProject({ name, startDate, endDate, requirements });
-                    this.projects.unshift(result);
-                    this.renderProjects();
-                    this.updateCounts();
+                    await Store.addProject({ name, startDate, endDate, requirements });
+                    // 数据已通过乐观更新 + 监听刷新，无需手动渲染
                     hideModal('projectModal');
                     document.getElementById('projectForm').reset();
                     toast('✅ 项目发布成功！', 'success');
@@ -1188,9 +1194,6 @@
                 if (!confirm('确定删除这个项目吗？')) return;
                 try {
                     await Store.deleteProject(id);
-                    this.projects = this.projects.filter(p => p.id !== id);
-                    this.renderProjects();
-                    this.updateCounts();
                     toast('已删除项目', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
@@ -1209,12 +1212,7 @@
                     return;
                 }
                 try {
-                    const result = await Store.addPerson({ name });
-                    this.persons.push(result);
-                    // 只刷新小人和下拉，不重新渲染项目
-                    this.renderPersonsAndSelects();
-                    this.renderPersonManage();
-                    this.updateCounts();
+                    await Store.addPerson({ name });
                     input.value = '';
                     toast('✅ 已添加小人', 'success');
                 } catch (err) {
@@ -1227,21 +1225,14 @@
                 newName = newName.trim();
                 if (!newName) {
                     toast('名称不能为空', 'error');
-                    this.renderPersonManage();
                     return;
                 }
                 if (this.persons.some(p => p.id !== id && p.name === newName)) {
                     toast('该名称已存在', 'error');
-                    this.renderPersonManage();
                     return;
                 }
                 try {
                     await Store.updatePerson(id, { name: newName });
-                    const p = this.persons.find(p => p.id === id);
-                    if (p) p.name = newName;
-                    this.renderPersonsAndSelects();
-                    this.renderPersonManage();
-                    this.updateCounts();
                     toast('已更新名称', 'success');
                 } catch (err) {
                     toast('更新失败', 'error');
@@ -1252,11 +1243,6 @@
                 if (!confirm('确定删除这个小人和相关任务吗？')) return;
                 try {
                     await Store.deletePerson(id);
-                    this.persons = this.persons.filter(p => p.id !== id);
-                    this.tasks = this.tasks.filter(t => t.fromPersonId !== id && t.toPersonId !== id);
-                    this.renderPersonsAndSelects();
-                    this.renderPersonManage();
-                    this.updateCounts();
                     toast('已删除小人', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
@@ -1288,8 +1274,7 @@
                 }
 
                 try {
-                    const result = await Store.addTask({ fromPersonId, toPersonId, content, deadline });
-                    this.tasks.unshift(result);
+                    await Store.addTask({ fromPersonId, toPersonId, content, deadline });
                     hideModal('taskModal');
                     document.getElementById('taskForm').reset();
                     toast('✅ 任务已发送！', 'success');
@@ -1370,9 +1355,6 @@
             async completeTask(id) {
                 try {
                     await Store.updateTask(id, { status: '已完成' });
-                    const t = this.tasks.find(t => t.id === id);
-                    if (t) t.status = '已完成';
-                    this.renderTaskList();
                     toast('✅ 任务已完成！', 'success');
                 } catch (err) {
                     toast('操作失败', 'error');
@@ -1383,18 +1365,10 @@
                 if (!confirm('确定删除这个任务吗？')) return;
                 try {
                     await Store.updateTask(id, { status: '已删除' });
-                    this.tasks = this.tasks.filter(t => t.id !== id);
-                    this.renderTaskList();
                     toast('已删除任务', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
                 }
-            },
-
-            async refreshData() {
-                await this.loadData();
-                this.renderAll();
-                toast('🔄 已刷新', 'success');
             }
         };
 
@@ -1435,7 +1409,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（优化版）');
+        console.log('🚀 任务平台已启动（实时同步版）');
     </script>
 </body>
 </html>
