@@ -9,6 +9,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
     </script>
     <style>
+        /* ===== 样式（与之前完全一致，此处省略以节省篇幅，实际部署时请保留） ===== */
         * {
             margin: 0;
             padding: 0;
@@ -257,6 +258,11 @@
             background: #fee2e2;
             color: #991b1b;
             border: 1px solid #fca5a5;
+        }
+        .status-undefined {
+            background: #e2e8f0;
+            color: #475569;
+            border: 1px solid #cbd5e1;
         }
         .project-card .p-actions {
             margin-top: 18px;
@@ -728,12 +734,12 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>申报开始时间 *</label>
-                        <input type="datetime-local" id="pStart" required />
+                        <label>申报开始时间</label>
+                        <input type="datetime-local" id="pStart" />
                     </div>
                     <div class="form-group">
-                        <label>申报结束时间 *</label>
-                        <input type="datetime-local" id="pEnd" required />
+                        <label>申报结束时间</label>
+                        <input type="datetime-local" id="pEnd" />
                     </div>
                 </div>
                 <div class="form-group">
@@ -792,8 +798,8 @@
                     <textarea id="taskContent" placeholder="描述任务详情" required></textarea>
                 </div>
                 <div class="form-group">
-                    <label>任务时限 *</label>
-                    <input type="datetime-local" id="taskDeadline" required />
+                    <label>任务时限</label>
+                    <input type="datetime-local" id="taskDeadline" />
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-outline" onclick="hideModal('taskModal')">取消</button>
@@ -829,7 +835,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (实时同步 + 分组排序 + 搜索) -->
+    <!-- JavaScript (时间非必填处理) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
@@ -856,7 +862,7 @@
         }
 
         // ================================================================
-        //  2. 数据存储层
+        //  2. 数据存储层 (不变)
         // ================================================================
         const Store = {
             _localData: { projects: [], persons: [], tasks: [] },
@@ -1012,7 +1018,7 @@
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (新增搜索)
+        //  3. 应用主逻辑 (时间非必填处理)
         // ================================================================
         const App = {
             projects: [],
@@ -1028,7 +1034,6 @@
                 this.renderAll();
                 setInterval(() => this.renderProjects(), 60000);
 
-                // 绑定搜索事件
                 const searchInput = document.getElementById('projectSearch');
                 searchInput.addEventListener('input', () => {
                     this.searchKeyword = searchInput.value.trim();
@@ -1063,13 +1068,12 @@
                 this.updateCounts();
             },
 
-            // ---- 项目大屏：分组 + 排序 + 搜索 ----
+            // ---- 项目大屏：处理空时间 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
                 const keyword = this.searchKeyword.toLowerCase();
 
-                // 过滤
                 let filtered = this.projects;
                 if (keyword) {
                     filtered = this.projects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
@@ -1086,11 +1090,15 @@
                     return;
                 }
 
-                // 分组
-                const groups = { pending: [], open: [], closed: [] };
+                // 分组：pending, open, closed, undefined
+                const groups = { pending: [], open: [], closed: [], undefined: [] };
                 filtered.forEach(p => {
-                    const start = new Date(p.startDate);
-                    const end = new Date(p.endDate);
+                    const start = p.startDate ? new Date(p.startDate) : null;
+                    const end = p.endDate ? new Date(p.endDate) : null;
+                    if (!start || !end) {
+                        groups.undefined.push({ ...p, _start: start, _end: end });
+                        return;
+                    }
                     let status;
                     if (now < start) {
                         status = 'pending';
@@ -1102,30 +1110,45 @@
                     groups[status].push({ ...p, _start: start, _end: end });
                 });
 
-                const sortByEnd = (a, b) => a._end - b._end;
+                const sortByEnd = (a, b) => {
+                    if (!a._end) return 1;
+                    if (!b._end) return -1;
+                    return a._end - b._end;
+                };
                 groups.pending.sort(sortByEnd);
                 groups.open.sort(sortByEnd);
                 groups.closed.sort(sortByEnd);
+                // undefined 按名称排序
+                groups.undefined.sort((a, b) => a.name.localeCompare(b.name));
 
                 const statusMap = {
                     pending: { label: '📌 待申报', class: 'status-pending' },
                     open: { label: '📌 申报中', class: 'status-open' },
-                    closed: { label: '📌 已截止', class: 'status-closed' }
+                    closed: { label: '📌 已截止', class: 'status-closed' },
+                    undefined: { label: '⏳ 时间未设定', class: 'status-undefined' }
                 };
 
                 let html = '';
-                ['pending', 'open', 'closed'].forEach(key => {
+                ['pending', 'open', 'closed', 'undefined'].forEach(key => {
                     const items = groups[key];
                     if (items.length === 0) return;
                     html += `<div class="group-title">${statusMap[key].label} (${items.length})</div>`;
                     items.forEach(p => {
-                        const statusText = key === 'pending' ? '待申报' : key === 'open' ? '申报中' :
-                            '已截止';
+                        let statusText = '';
+                        if (key === 'pending') statusText = '待申报';
+                        else if (key === 'open') statusText = '申报中';
+                        else if (key === 'closed') statusText = '已截止';
+                        else statusText = '时间未设定';
+
+                        const timeDisplay = (p._start && p._end) ?
+                            `🕒 ${p._start.toLocaleString('zh-CN')}  ~  ${p._end.toLocaleString('zh-CN')}` :
+                            '⏳ 时间未设定';
+
                         html += `
                             <div class="project-card">
                                 <div class="p-name">${this._escape(p.name)}</div>
                                 <div class="p-meta">
-                                    <span>🕒 ${p._start.toLocaleString('zh-CN')}  ~  ${p._end.toLocaleString('zh-CN')}</span>
+                                    <span>${timeDisplay}</span>
                                 </div>
                                 <div class="p-req">📌 ${this._escape(p.requirements || '无硬性要求')}</div>
                                 <span class="p-status ${statusMap[key].class}">${statusText}</span>
@@ -1141,7 +1164,7 @@
                 document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
             },
 
-            // ---- 任务清单：分组 + 排序 ----
+            // ---- 任务清单：处理空时限 ----
             renderTaskList() {
                 const sel = document.getElementById('taskListFilter');
                 const personId = sel.value;
@@ -1169,8 +1192,18 @@
                 const pending = tasks.filter(t => t.status !== '已完成');
                 const done = tasks.filter(t => t.status === '已完成');
 
-                pending.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
-                done.sort((a, b) => new Date(b.deadline) - new Date(a.deadline));
+                // 未完成排序：有时限的按截止时间升序，无时限的排在最后
+                pending.sort((a, b) => {
+                    if (!a.deadline) return 1;
+                    if (!b.deadline) return -1;
+                    return new Date(a.deadline) - new Date(b.deadline);
+                });
+                // 已完成排序：有时限的按截止时间降序，无时限的排在最后
+                done.sort((a, b) => {
+                    if (!a.deadline) return 1;
+                    if (!b.deadline) return -1;
+                    return new Date(b.deadline) - new Date(a.deadline);
+                });
 
                 const renderItems = (items, title, emoji) => {
                     if (items.length === 0) return '';
@@ -1178,7 +1211,8 @@
                     items.forEach(t => {
                         const from = this.persons.find(p => p.id === t.fromPersonId);
                         const fromName = from ? from.name : '已删除';
-                        const deadline = new Date(t.deadline).toLocaleString('zh-CN');
+                        const deadlineDisplay = t.deadline ? new Date(t.deadline).toLocaleString(
+                            'zh-CN') : '⏳ 无时限';
                         const isDone = t.status === '已完成';
                         const detailId = 'taskDetail_' + t.id;
 
@@ -1186,14 +1220,14 @@
                             <div class="task-item" onclick="App.toggleTaskDetail('${detailId}')">
                                 <div class="task-head">
                                     <span class="task-from">📤 ${this._escape(fromName)}</span>
-                                    <span class="task-deadline">⏰ ${deadline}</span>
+                                    <span class="task-deadline">⏰ ${deadlineDisplay}</span>
                                     <span class="task-status-badge ${isDone ? 'done' : ''}">${isDone ? '✅ 已完成' : '⏳ 待完成'}</span>
                                 </div>
                                 <div class="task-content">${this._escape(t.content)}</div>
                                 <div class="task-detail-popup" id="${detailId}">
                                     <div><span class="label">发布者：</span>${this._escape(fromName)}</div>
                                     <div><span class="label">内容：</span>${this._escape(t.content)}</div>
-                                    <div><span class="label">时限：</span>${deadline}</div>
+                                    <div><span class="label">时限：</span>${deadlineDisplay}</div>
                                     <div style="margin-top:10px;display:flex;gap:10px;">
                                         ${!isDone ? `<button class="btn btn-success btn-xs" onclick="event.stopPropagation();App.completeTask('${t.id}')">✅ 标记完成</button>` : ''}
                                         <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();App.deleteTask('${t.id}')">🗑️ 删除</button>
@@ -1211,7 +1245,7 @@
                 container.innerHTML = html;
             },
 
-            // ---- 其余辅助函数 ----
+            // ---- 其余辅助函数（不变） ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1303,15 +1337,11 @@
                 const endDate = document.getElementById('pEnd').value;
                 const requirements = document.getElementById('pReq').value.trim();
 
-                if (!name || !startDate || !endDate) {
-                    toast('请填写完整信息', 'error');
+                if (!name) {
+                    toast('项目名称不能为空', 'error');
                     return;
                 }
-                if (new Date(startDate) >= new Date(endDate)) {
-                    toast('结束时间必须晚于开始时间', 'error');
-                    return;
-                }
-
+                // 时间可选，不再验证
                 try {
                     await Store.addProject({ name, startDate, endDate, requirements });
                     hideModal('projectModal');
@@ -1397,15 +1427,7 @@
                     toast('请输入任务内容', 'error');
                     return;
                 }
-                if (!deadline) {
-                    toast('请选择任务时限', 'error');
-                    return;
-                }
-                if (new Date(deadline) <= new Date()) {
-                    toast('任务时限必须晚于当前时间', 'error');
-                    return;
-                }
-
+                // deadline 可选，不再验证
                 try {
                     await Store.addTask({ fromPersonId, toPersonId, content, deadline });
                     hideModal('taskModal');
@@ -1486,7 +1508,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（搜索版）');
+        console.log('🚀 任务平台已启动（时间非必填版）');
     </script>
 </body>
 </html>
