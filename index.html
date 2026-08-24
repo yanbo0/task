@@ -9,7 +9,8 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
     </script>
     <style>
-        /* ===== 样式（与之前完全一致，此处省略以节省篇幅，实际部署时请保留） ===== */
+        /* ===== 样式完全沿用之前的版本（为节省篇幅，此处省略，但实际代码中必须保留） ===== */
+        /* 您可以直接复制之前美化版的全部样式，或使用以下简化占位 */
         * {
             margin: 0;
             padding: 0;
@@ -734,12 +735,12 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>申报开始时间</label>
-                        <input type="datetime-local" id="pStart" />
+                        <label>申报开始日期</label>
+                        <input type="date" id="pStart" />
                     </div>
                     <div class="form-group">
-                        <label>申报结束时间</label>
-                        <input type="datetime-local" id="pEnd" />
+                        <label>申报结束日期</label>
+                        <input type="date" id="pEnd" />
                     </div>
                 </div>
                 <div class="form-group">
@@ -798,8 +799,8 @@
                     <textarea id="taskContent" placeholder="描述任务详情" required></textarea>
                 </div>
                 <div class="form-group">
-                    <label>任务时限</label>
-                    <input type="datetime-local" id="taskDeadline" />
+                    <label>任务截止日期</label>
+                    <input type="date" id="taskDeadline" />
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-outline" onclick="hideModal('taskModal')">取消</button>
@@ -835,7 +836,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (时间非必填处理) -->
+    <!-- JavaScript (日期美化 + 跨设备同步) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
@@ -1018,7 +1019,7 @@
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (时间非必填处理)
+        //  3. 应用主逻辑 (日期显示格式化)
         // ================================================================
         const App = {
             projects: [],
@@ -1068,7 +1069,19 @@
                 this.updateCounts();
             },
 
-            // ---- 项目大屏：处理空时间 ----
+            // ---- 格式化日期显示 ----
+            _formatDate(dateStr) {
+                if (!dateStr) return null;
+                try {
+                    const d = new Date(dateStr);
+                    if (isNaN(d)) return dateStr; // fallback
+                    return d.toISOString().split('T')[0]; // YYYY-MM-DD
+                } catch (e) {
+                    return dateStr;
+                }
+            },
+
+            // ---- 项目大屏：分组排序 + 日期显示 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
@@ -1090,7 +1103,6 @@
                     return;
                 }
 
-                // 分组：pending, open, closed, undefined
                 const groups = { pending: [], open: [], closed: [], undefined: [] };
                 filtered.forEach(p => {
                     const start = p.startDate ? new Date(p.startDate) : null;
@@ -1118,7 +1130,6 @@
                 groups.pending.sort(sortByEnd);
                 groups.open.sort(sortByEnd);
                 groups.closed.sort(sortByEnd);
-                // undefined 按名称排序
                 groups.undefined.sort((a, b) => a.name.localeCompare(b.name));
 
                 const statusMap = {
@@ -1140,8 +1151,10 @@
                         else if (key === 'closed') statusText = '已截止';
                         else statusText = '时间未设定';
 
-                        const timeDisplay = (p._start && p._end) ?
-                            `🕒 ${p._start.toLocaleString('zh-CN')}  ~  ${p._end.toLocaleString('zh-CN')}` :
+                        const startDisplay = this._formatDate(p.startDate);
+                        const endDisplay = this._formatDate(p.endDate);
+                        const timeDisplay = (startDisplay && endDisplay) ?
+                            `📅 ${startDisplay}  ~  ${endDisplay}` :
                             '⏳ 时间未设定';
 
                         html += `
@@ -1164,7 +1177,7 @@
                 document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
             },
 
-            // ---- 任务清单：处理空时限 ----
+            // ---- 任务清单：分组排序 + 日期显示 ----
             renderTaskList() {
                 const sel = document.getElementById('taskListFilter');
                 const personId = sel.value;
@@ -1192,13 +1205,11 @@
                 const pending = tasks.filter(t => t.status !== '已完成');
                 const done = tasks.filter(t => t.status === '已完成');
 
-                // 未完成排序：有时限的按截止时间升序，无时限的排在最后
                 pending.sort((a, b) => {
                     if (!a.deadline) return 1;
                     if (!b.deadline) return -1;
                     return new Date(a.deadline) - new Date(b.deadline);
                 });
-                // 已完成排序：有时限的按截止时间降序，无时限的排在最后
                 done.sort((a, b) => {
                     if (!a.deadline) return 1;
                     if (!b.deadline) return -1;
@@ -1211,8 +1222,7 @@
                     items.forEach(t => {
                         const from = this.persons.find(p => p.id === t.fromPersonId);
                         const fromName = from ? from.name : '已删除';
-                        const deadlineDisplay = t.deadline ? new Date(t.deadline).toLocaleString(
-                            'zh-CN') : '⏳ 无时限';
+                        const deadlineDisplay = t.deadline ? this._formatDate(t.deadline) : '⏳ 无时限';
                         const isDone = t.status === '已完成';
                         const detailId = 'taskDetail_' + t.id;
 
@@ -1220,14 +1230,14 @@
                             <div class="task-item" onclick="App.toggleTaskDetail('${detailId}')">
                                 <div class="task-head">
                                     <span class="task-from">📤 ${this._escape(fromName)}</span>
-                                    <span class="task-deadline">⏰ ${deadlineDisplay}</span>
+                                    <span class="task-deadline">📅 ${deadlineDisplay}</span>
                                     <span class="task-status-badge ${isDone ? 'done' : ''}">${isDone ? '✅ 已完成' : '⏳ 待完成'}</span>
                                 </div>
                                 <div class="task-content">${this._escape(t.content)}</div>
                                 <div class="task-detail-popup" id="${detailId}">
                                     <div><span class="label">发布者：</span>${this._escape(fromName)}</div>
                                     <div><span class="label">内容：</span>${this._escape(t.content)}</div>
-                                    <div><span class="label">时限：</span>${deadlineDisplay}</div>
+                                    <div><span class="label">截止日期：</span>${deadlineDisplay}</div>
                                     <div style="margin-top:10px;display:flex;gap:10px;">
                                         ${!isDone ? `<button class="btn btn-success btn-xs" onclick="event.stopPropagation();App.completeTask('${t.id}')">✅ 标记完成</button>` : ''}
                                         <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();App.deleteTask('${t.id}')">🗑️ 删除</button>
@@ -1341,7 +1351,6 @@
                     toast('项目名称不能为空', 'error');
                     return;
                 }
-                // 时间可选，不再验证
                 try {
                     await Store.addProject({ name, startDate, endDate, requirements });
                     hideModal('projectModal');
@@ -1427,7 +1436,6 @@
                     toast('请输入任务内容', 'error');
                     return;
                 }
-                // deadline 可选，不再验证
                 try {
                     await Store.addTask({ fromPersonId, toPersonId, content, deadline });
                     hideModal('taskModal');
@@ -1508,7 +1516,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（时间非必填版）');
+        console.log('🚀 任务平台已启动（年月日版 + 跨设备同步）');
     </script>
 </body>
 </html>
