@@ -9,7 +9,8 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
     </script>
     <style>
-        /* ===== 样式（完整，与前一致） ===== */
+        /* 样式与前一致，为节省篇幅此处略（请从上一版完整复制） */
+        /* 为确保完整，此处包含完整样式 */
         * {
             margin: 0;
             padding: 0;
@@ -871,16 +872,16 @@
             firebase.initializeApp(firebaseConfig);
             db = firebase.firestore();
             useFirebase = true;
-            console.log('✅ Firebase 初始化成功，跨设备同步已启用');
+            console.log('✅ Firebase 初始化成功');
             document.getElementById('syncStatus').textContent = '🟢 在线';
         } catch (e) {
             console.warn('⚠️ Firebase 初始化失败，数据仅存储于当前浏览器 (无法跨设备同步)', e);
-            document.getElementById('syncStatus').textContent = '⚠️ 离线模式 (仅本地)';
+            document.getElementById('syncStatus').textContent = '⚠️ 离线模式';
             document.getElementById('syncStatus').className = 'status-indicator offline';
         }
 
         // ================================================================
-        //  2. 数据存储层 (使用 Firestore add() 自动生成 ID，彻底避免覆盖)
+        //  2. 数据存储层 (使用 Firestore add() 自动生成 ID)
         // ================================================================
         const Store = {
             _localData: { projects: [], persons: [], tasks: [] },
@@ -921,7 +922,6 @@
             },
 
             _startRealtimeListeners() {
-                // 监听 projects 集合 (使用 onSnapshot 实时更新)
                 const unsubProjects = db.collection('projects')
                     .onSnapshot(snapshot => {
                         const projects = [];
@@ -937,7 +937,6 @@
                         this._updateSyncStatus('error');
                     });
 
-                // 监听 persons
                 const unsubPersons = db.collection('persons')
                     .onSnapshot(snapshot => {
                         const persons = [];
@@ -949,7 +948,6 @@
                         if (App) App.onDataUpdate('persons', persons);
                     }, error => console.warn('Persons 监听错误', error));
 
-                // 监听 tasks
                 const unsubTasks = db.collection('tasks')
                     .onSnapshot(snapshot => {
                         const tasks = [];
@@ -962,7 +960,7 @@
                     }, error => console.warn('Tasks 监听错误', error));
 
                 this._listeners = [unsubProjects, unsubPersons, unsubTasks];
-                console.log('👂 实时监听已开启，数据将自动同步到所有设备');
+                console.log('👂 实时监听已开启');
             },
 
             _updateSyncStatus(state) {
@@ -979,26 +977,19 @@
                 }
             },
 
-            detachListeners() {
-                this._listeners.forEach(unsub => unsub && unsub());
-                this._listeners = [];
-            },
-
-            // ---- 新增数据：使用 Firestore 的 add() 方法，自动生成唯一 ID ----
+            // ---- 新增数据：使用 Firestore add() ----
             async addProject(data) {
                 const payload = { ...data, createdAt: new Date().toISOString() };
                 if (useFirebase) {
                     try {
                         const docRef = await db.collection('projects').add(payload);
-                        // 本地缓存立即更新（乐观更新），监听器会再次同步
                         const newItem = { id: docRef.id, ...payload };
                         this._localData.projects.unshift(newItem);
                         this._saveLocal();
-                        console.log('✅ 项目已添加到 Firestore，ID:', docRef.id);
+                        console.log('✅ 项目已添加，ID:', docRef.id);
                         return newItem;
                     } catch (e) {
                         console.error('Firebase 添加项目失败', e);
-                        // 降级到本地
                         return this._addLocal('projects', payload);
                     }
                 } else {
@@ -1012,7 +1003,7 @@
                 if (useFirebase) {
                     try {
                         await db.collection('projects').doc(id).delete();
-                        console.log('🗑️ 项目已从 Firestore 删除', id);
+                        console.log('🗑️ 项目已删除', id);
                     } catch (e) {
                         console.warn('删除项目失败', e);
                     }
@@ -1028,7 +1019,7 @@
                         const newItem = { id: docRef.id, ...payload };
                         this._localData.persons.push(newItem);
                         this._saveLocal();
-                        console.log('✅ 小人已添加到 Firestore，ID:', docRef.id);
+                        console.log('✅ 小人已添加，ID:', docRef.id);
                         return newItem;
                     } catch (e) {
                         console.error('Firebase 添加小人失败', e);
@@ -1063,7 +1054,7 @@
                 if (useFirebase) {
                     try {
                         await db.collection('persons').doc(id).delete();
-                        console.log('🗑️ 小人已从 Firestore 删除', id);
+                        console.log('🗑️ 小人已删除', id);
                     } catch (e) {
                         console.warn('删除小人失败', e);
                     }
@@ -1079,7 +1070,7 @@
                         const newItem = { id: docRef.id, ...payload };
                         this._localData.tasks.unshift(newItem);
                         this._saveLocal();
-                        console.log('✅ 任务已添加到 Firestore，ID:', docRef.id);
+                        console.log('✅ 任务已添加，ID:', docRef.id);
                         return newItem;
                     } catch (e) {
                         console.error('Firebase 添加任务失败', e);
@@ -1108,7 +1099,6 @@
                 return false;
             },
 
-            // ---- 本地降级方法 ----
             _addLocal(collection, payload) {
                 const id = 'local_' + Date.now() + Math.random().toString(36).slice(2);
                 const item = { id, ...payload };
@@ -1117,14 +1107,13 @@
                 return item;
             },
 
-            // ---- 读取数据 ----
             getProjects() { return this._localData.projects || []; },
             getPersons() { return this._localData.persons || []; },
             getTasks() { return this._localData.tasks || []; }
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (中文日期显示)
+        //  3. 应用主逻辑 (与之前相同)
         // ================================================================
         const App = {
             projects: [],
@@ -1176,7 +1165,6 @@
                 this.updateCounts();
             },
 
-            // ---- 格式化日期 ----
             _formatDateTime(dateStr) {
                 if (!dateStr) return null;
                 try {
@@ -1194,7 +1182,6 @@
                 }
             },
 
-            // ---- 项目大屏 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
@@ -1290,7 +1277,6 @@
                 document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
             },
 
-            // ---- 任务清单 ----
             renderTaskList() {
                 const sel = document.getElementById('taskListFilter');
                 const personId = sel.value;
@@ -1368,7 +1354,6 @@
                 container.innerHTML = html;
             },
 
-            // ---- 辅助函数 ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
