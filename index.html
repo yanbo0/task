@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>✨ 任务协作平台（YesApi）</title>
     <style>
-        /* ===== 样式与前一致，为节省篇幅略，实际使用请保留完整样式 ===== */
+        /* ===== 样式（完整，与之前一致） ===== */
         * {
             margin: 0;
             padding: 0;
@@ -846,18 +846,18 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (适配你现有字段名) -->
+    <!-- JavaScript（适配你现有字段名 + 修复语法错误） -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
-        //  1. YesApi 配置（已从你的截图获取）
+        //  1. YesApi 配置（已根据你的截图填入）
         // ================================================================
         const APP_KEY = '48840E74CC44E952482803AF2B5D7393';
         const API_BASE = 'http://hn.api.yesapi.net/';
 
-        // 通用 API 调用函数（增加 where 参数）
+        // 通用 API 调用函数
         async function callYesApi(service, params = {}) {
-            // 强制为 Query 接口添加 where 参数
+            // 对于 Query 接口，自动添加 where 参数（如果未提供）
             if (service === 'App.Table.Query' && !params.where) {
                 params.where = '{}';
             }
@@ -883,9 +883,10 @@
         }
 
         // ================================================================
-        //  2. 数据存储层（适配字段名）
+        //  2. 数据存储层（适配你的字段名）
         // ================================================================
         const Store = {
+            // 加载所有数据
             async loadAllData() {
                 try {
                     const [projects, persons, tasks] = await Promise.all([
@@ -893,10 +894,10 @@
                         callYesApi('App.Table.Query', { model_name: 'persons' }),
                         callYesApi('App.Table.Query', { model_name: 'tasks' })
                     ]);
-                    // 注意数据结构：可能 data.list 或 data.data，兼容处理
-                    const projList = projects.list || projects.data || [];
-                    const persList = persons.list || persons.data || [];
-                    const taskList = tasks.list || tasks.data || [];
+                    // 统一提取列表（有些接口返回 list，有些返回 data）
+                    const projList = Array.isArray(projects) ? projects : (projects.list || projects.data || []);
+                    const persList = Array.isArray(persons) ? persons : (persons.list || persons.data || []);
+                    const taskList = Array.isArray(tasks) ? tasks : (tasks.list || tasks.data || []);
                     return { projects: projList, persons: persList, tasks: taskList };
                 } catch (e) {
                     console.error('加载数据失败', e);
@@ -904,11 +905,11 @@
                 }
             },
 
-            // 创建项目 - 映射字段名
+            // 创建项目（字段名：item_name, startDate, endDate, requirements）
             async addProject(data) {
                 const params = {
                     model_name: 'projects',
-                    data_item_name: data.name,        // 对应字段 item_name
+                    data_item_name: data.name,          // 项目名称字段是 item_name
                     data_startDate: data.startDate || '',
                     data_endDate: data.endDate || '',
                     data_requirements: data.requirements || ''
@@ -917,20 +918,23 @@
                 return { id: result.id, ...data };
             },
 
+            // 删除项目
             async deleteProject(id) {
                 await callYesApi('App.Table.Delete', { model_name: 'projects', id: id });
                 return true;
             },
 
+            // 创建小人（字段名：personname）
             async addPerson(data) {
                 const params = {
                     model_name: 'persons',
-                    data_personname: data.name        // 对应字段 personname
+                    data_personname: data.name      // 小人名称字段是 personname
                 };
                 const result = await callYesApi('App.Table.Create', params);
                 return { id: result.id, ...data };
             },
 
+            // 更新小人
             async updatePerson(id, data) {
                 await callYesApi('App.Table.Update', {
                     model_name: 'persons',
@@ -940,36 +944,39 @@
                 return true;
             },
 
+            // 删除小人
             async deletePerson(id) {
                 await callYesApi('App.Table.Delete', { model_name: 'persons', id: id });
                 return true;
             },
 
+            // 创建任务（字段名：fromPersonld, toPersonld, content, deadline, book_status）
             async addTask(data) {
                 const params = {
                     model_name: 'tasks',
-                    data_fromPersonId: data.fromPersonId,   // 字段名 fromPersonId（注意大小写）
-                    data_toPersonId: data.toPersonId,
+                    data_fromPersonld: data.fromPersonId,   // 注意字段名是 fromPersonld (ld结尾)
+                    data_toPersonld: data.toPersonId,       // 字段名是 toPersonld
                     data_content: data.content,
                     data_deadline: data.deadline || '',
-                    data_book_status: '待完成'               // 字段名 book_status
+                    data_book_status: '待完成'              // 状态字段是 book_status
                 };
                 const result = await callYesApi('App.Table.Create', params);
                 return { id: result.id, ...data, status: '待完成' };
             },
 
+            // 更新任务状态（更新 book_status 字段）
             async updateTask(id, data) {
                 await callYesApi('App.Table.Update', {
                     model_name: 'tasks',
                     id: id,
-                    data_book_status: data.status        // 状态字段 book_status
+                    data_book_status: data.status       // 状态字段是 book_status
                 });
                 return true;
             }
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (完全沿用之前的渲染逻辑，字段读取时映射)
+        //  3. 应用主逻辑
         // ================================================================
         const App = {
             projects: [],
@@ -980,8 +987,11 @@
             async init() {
                 await this.syncData();
                 this.renderAll();
+                // 定时轮询（每5秒）
                 setInterval(() => this.syncData(), 5000);
+                // 每分钟刷新项目状态
                 setInterval(() => this.renderProjects(), 60000);
+                // 搜索框
                 document.getElementById('projectSearch').addEventListener('input', (e) => {
                     this.searchKeyword = e.target.value.trim();
                     this.renderProjects();
@@ -999,7 +1009,7 @@
                     this.renderAll();
                     document.getElementById('syncStatus').textContent = '🟢 在线';
                 } catch (e) {
-                    console.warn('同步失败', e);
+                    console.warn('同步失败，使用本地缓存', e);
                     document.getElementById('syncStatus').textContent = '⚠️ 同步失败';
                     document.getElementById('syncStatus').className = 'status-indicator offline';
                 }
@@ -1039,21 +1049,15 @@
                 return div.innerHTML;
             },
 
-            // ---- 项目大屏（读取 item_name 作为 name） ----
+            // ---- 项目大屏 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
                 const keyword = this.searchKeyword.toLowerCase();
 
-                // 将 item_name 映射为 name，方便后续处理
-                const mappedProjects = this.projects.map(p => ({
-                    ...p,
-                    name: p.item_name || p.name || ''
-                }));
-
-                let filtered = mappedProjects;
+                let filtered = this.projects;
                 if (keyword) {
-                    filtered = mappedProjects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
+                    filtered = this.projects.filter(p => p.item_name && p.item_name.toLowerCase().includes(keyword));
                 }
 
                 if (filtered.length === 0) {
@@ -1090,7 +1094,7 @@
                 groups.pending.sort(sortByEnd);
                 groups.open.sort(sortByEnd);
                 groups.closed.sort(sortByEnd);
-                groups.undefined.sort((a, b) => a.name.localeCompare(b.name));
+                groups.undefined.sort((a, b) => a.item_name.localeCompare(b.item_name));
 
                 const statusMap = {
                     pending: { label: '📌 待申报', class: 'status-pending' },
@@ -1114,7 +1118,7 @@
                             '⏳ 时间未设定';
                         html += `
                             <div class="project-card">
-                                <div class="p-name">${this._escape(p.name)}</div>
+                                <div class="p-name">${this._escape(p.item_name)}</div>
                                 <div class="p-meta"><span>${timeDisplay}</span></div>
                                 <div class="p-req">📌 ${this._escape(p.requirements || '无硬性要求')}</div>
                                 <span class="p-status ${statusMap[key].class}">${statusText}</span>
@@ -1148,14 +1152,13 @@
                     return;
                 }
 
-                const tasks = this.tasks.filter(t => t.toPersonId === personId);
+                const tasks = this.tasks.filter(t => t.toPersonld === personId);
                 if (tasks.length === 0) {
                     container.innerHTML =
-                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.personname || person.name)} 暂无任务</p>`;
+                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.personname)} 暂无任务</p>`;
                     return;
                 }
 
-                // 任务状态字段是 book_status
                 const pending = tasks.filter(t => t.book_status !== '已完成');
                 const done = tasks.filter(t => t.book_status === '已完成');
 
@@ -1174,8 +1177,8 @@
                     if (items.length === 0) return '';
                     let html = `<div style="margin-top:16px;"><span class="task-group-title">${emoji} ${title} (${items.length})</span></div>`;
                     items.forEach(t => {
-                        const from = this.persons.find(p => p.id === t.fromPersonId);
-                        const fromName = from ? (from.personname || from.name) : '已删除';
+                        const from = this.persons.find(p => p.id === t.fromPersonld);
+                        const fromName = from ? from.personname : '已删除';
                         const deadlineDisplay = t.deadline ? this._formatDateTime(t.deadline) : '⏳ 无时限';
                         const isDone = t.book_status === '已完成';
                         const detailId = 'taskDetail_' + t.id;
@@ -1202,14 +1205,13 @@
                     return html;
                 };
 
-                const personName = person.personname || person.name || '未知';
-                let html = `<div style="margin-bottom:8px;font-weight:700;font-size:18px;">🧑 ${this._escape(personName)} 的任务</div>`;
+                let html = `<div style="margin-bottom:8px;font-weight:700;font-size:18px;">🧑 ${this._escape(person.personname)} 的任务</div>`;
                 html += renderItems(pending, '未完成', '⏳');
                 html += renderItems(done, '已完成', '✅');
                 container.innerHTML = html;
             },
 
-            // ---- 小人相关渲染（persons 表字段 personname） ----
+            // ---- 小人相关 ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1226,11 +1228,10 @@
                 let html = '';
                 this.persons.forEach((p, idx) => {
                     const color = colors[idx % colors.length];
-                    const name = p.personname || p.name || '';
                     html += `
                         <span class="小人标签" title="点击查看任务清单" onclick="App.viewTaskList('${p.id}')">
                             <span class="dot" style="background:${color};"></span>
-                            ${this._escape(name)}
+                            ${this._escape(p.personname)}
                         </span>
                     `;
                 });
@@ -1241,20 +1242,18 @@
             renderTaskSelects() {
                 const fromSel = document.getElementById('taskFrom');
                 const toSel = document.getElementById('taskTo');
-                const options = this.persons.map(p => {
-                    const name = p.personname || p.name || '';
-                    return `<option value="${p.id}">${this._escape(name)}</option>`;
-                }).join('');
+                const options = this.persons.map(p =>
+                    `<option value="${p.id}">${this._escape(p.personname)}</option>`
+                ).join('');
                 fromSel.innerHTML = options;
                 toSel.innerHTML = options;
             },
 
             renderTaskListFilter() {
                 const sel = document.getElementById('taskListFilter');
-                const options = this.persons.map(p => {
-                    const name = p.personname || p.name || '';
-                    return `<option value="${p.id}">${this._escape(name)}</option>`;
-                }).join('');
+                const options = this.persons.map(p =>
+                    `<option value="${p.id}">${this._escape(p.personname)}</option>`
+                ).join('');
                 sel.innerHTML = `<option value="">-- 请选择 --</option>` + options;
             },
 
@@ -1266,11 +1265,10 @@
                 }
                 let html = '';
                 this.persons.forEach(p => {
-                    const name = p.personname || p.name || '';
                     html += `
                         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;background:#f8fafc;padding:10px 16px;border-radius:14px;">
-                            <span style="font-weight:600;min-width:32px;">${this._escape(name)}</span>
-                            <input type="text" value="${this._escape(name)}" 
+                            <span style="font-weight:600;min-width:32px;">${this._escape(p.personname)}</span>
+                            <input type="text" value="${this._escape(p.personname)}" 
                                    style="flex:1;padding:8px 12px;border:2px solid #e2e8f0;border-radius:12px;font-size:14px;background:white;"
                                    onchange="App.updatePersonName('${p.id}', this.value)" />
                             <button class="btn btn-danger btn-xs" onclick="App.deletePerson('${p.id}')">删除</button>
@@ -1282,10 +1280,10 @@
 
             updateCounts() {
                 const keyword = this.searchKeyword.toLowerCase();
-                let count = this.projects.filter(p => {
-                    const name = p.item_name || p.name || '';
-                    return keyword ? name.toLowerCase().includes(keyword) : true;
-                });
+                let count = this.projects;
+                if (keyword) {
+                    count = this.projects.filter(p => p.item_name && p.item_name.toLowerCase().includes(keyword));
+                }
                 document.getElementById('projectCount').textContent = `${count.length} 个项目`;
                 document.getElementById('小人Count').textContent = this.persons.length;
             },
@@ -1332,7 +1330,7 @@
                     toast('请输入小人名称', 'error');
                     return;
                 }
-                if (this.persons.some(p => (p.personname || p.name) === name)) {
+                if (this.persons.some(p => p.personname === name)) {
                     toast('该名称已存在，请换一个', 'error');
                     return;
                 }
@@ -1353,7 +1351,7 @@
                     toast('名称不能为空', 'error');
                     return;
                 }
-                if (this.persons.some(p => p.id !== id && (p.personname || p.name) === newName)) {
+                if (this.persons.some(p => p.id !== id && p.personname === newName)) {
                     toast('该名称已存在', 'error');
                     return;
                 }
@@ -1475,7 +1473,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动 (适配你的表单字段)');
+        console.log('🚀 任务平台已启动 (适配你现有字段名)');
     </script>
 </body>
 </html>
