@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>✨ 任务协作平台（YesApi）</title>
+    <title>✨ 任务协作平台（直连版）</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js">
     </script>
     <style>
-        /* ===== 样式（完整，与之前一致） ===== */
+        /* ===== 样式同前，完整保留 ===== */
         * {
             margin: 0;
             padding: 0;
@@ -848,7 +848,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript（完整版，带签名生成） -->
+    <!-- JavaScript（使用直连接口） -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
@@ -859,16 +859,13 @@
         const API_BASE = 'https://hn.api.yesapi.net/';
 
         // ================================================================
-        //  2. 签名生成（使用 CryptoJS）
+        //  2. 签名生成
         // ================================================================
         function md5(str) {
             return CryptoJS.MD5(str).toString().toUpperCase();
         }
 
         async function callYesApi(service, params = {}) {
-            if (service === 'App.Table.Query' && !params.where) {
-                params.where = '{}';
-            }
             const allParams = {
                 s: service,
                 app_key: APP_KEY,
@@ -883,13 +880,14 @@
             });
             signStr = signStr.slice(0, -1);
             signStr += APP_SECRET;
-            const sign = md5(signStr);
-            allParams.sign = sign;
+            allParams.sign = md5(signStr);
 
             const url = API_BASE + '?' + new URLSearchParams(allParams);
+            console.log(`📤 请求 ${service}:`, url);
             try {
                 const res = await fetch(url);
                 const json = await res.json();
+                console.log(`📥 响应 ${service}:`, json);
                 if (json.ret === 200) {
                     return json.data;
                 } else {
@@ -903,85 +901,75 @@
         }
 
         // ================================================================
-        //  3. 数据存储层
+        //  3. 数据存储层（使用直连接口）
         // ================================================================
         const Store = {
             async loadAllData() {
                 try {
+                    // 使用直连接口查询，不依赖表单结构
                     const [projects, persons, tasks] = await Promise.all([
-                        callYesApi('App.Table.Query', { model_name: 'projects' }),
-                        callYesApi('App.Table.Query', { model_name: 'persons' }),
-                        callYesApi('App.Table.Query', { model_name: 'tasks' })
+                        callYesApi('App.SuperTable.FreeQuery', {
+                            sql: 'SELECT * FROM projects ORDER BY id DESC'
+                        }),
+                        callYesApi('App.SuperTable.FreeQuery', {
+                            sql: 'SELECT * FROM persons ORDER BY id DESC'
+                        }),
+                        callYesApi('App.SuperTable.FreeQuery', {
+                            sql: 'SELECT * FROM tasks ORDER BY id DESC'
+                        })
                     ]);
-                    const projList = Array.isArray(projects) ? projects : (projects.list || projects.data || []);
-                    const persList = Array.isArray(persons) ? persons : (persons.list || persons.data || []);
-                    const taskList = Array.isArray(tasks) ? tasks : (tasks.list || tasks.data || []);
+                    // 提取数据（直连接口返回 data.list）
+                    const projList = projects.list || projects.data || [];
+                    const persList = persons.list || persons.data || [];
+                    const taskList = tasks.list || tasks.data || [];
+                    console.log(`✅ 直连查询结果: 项目 ${projList.length} 个, 小人 ${persList.length} 个, 任务 ${taskList.length} 个`);
                     return { projects: projList, persons: persList, tasks: taskList };
                 } catch (e) {
-                    console.error('加载数据失败', e);
+                    console.error('❌ 加载数据失败', e);
                     return { projects: [], persons: [], tasks: [] };
                 }
             },
 
+            // 创建项目（使用直连接口）
             async addProject(data) {
-                const params = {
-                    model_name: 'projects',
-                    data_item_name: data.name,
-                    data_startDate: data.startDate || '',
-                    data_endDate: data.endDate || '',
-                    data_requirements: data.requirements || ''
-                };
-                const result = await callYesApi('App.Table.Create', params);
-                return { id: result.id, ...data };
+                const sql = `INSERT INTO projects (item_name, startDate, endDate, requirements, add_time) VALUES ('${data.name}', '${data.startDate || ''}', '${data.endDate || ''}', '${data.requirements || ''}', NOW())`;
+                const result = await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                return { id: result.insert_id, ...data };
             },
 
             async deleteProject(id) {
-                await callYesApi('App.Table.Delete', { model_name: 'projects', id: id });
+                const sql = `DELETE FROM projects WHERE id = ${id}`;
+                await callYesApi('App.SuperTable.FreeUpdate', { sql });
                 return true;
             },
 
             async addPerson(data) {
-                const params = {
-                    model_name: 'persons',
-                    data_personname: data.name
-                };
-                const result = await callYesApi('App.Table.Create', params);
-                return { id: result.id, ...data };
+                const sql = `INSERT INTO persons (personname, add_time) VALUES ('${data.name}', NOW())`;
+                const result = await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                return { id: result.insert_id, ...data };
             },
 
             async updatePerson(id, data) {
-                await callYesApi('App.Table.Update', {
-                    model_name: 'persons',
-                    id: id,
-                    data_personname: data.name
-                });
+                const sql = `UPDATE persons SET personname = '${data.name}' WHERE id = ${id}`;
+                await callYesApi('App.SuperTable.FreeUpdate', { sql });
                 return true;
             },
 
             async deletePerson(id) {
-                await callYesApi('App.Table.Delete', { model_name: 'persons', id: id });
+                const sql = `DELETE FROM persons WHERE id = ${id}`;
+                await callYesApi('App.SuperTable.FreeUpdate', { sql });
                 return true;
             },
 
             async addTask(data) {
-                const params = {
-                    model_name: 'tasks',
-                    data_fromPersonld: data.fromPersonId,
-                    data_toPersonld: data.toPersonId,
-                    data_content: data.content,
-                    data_deadline: data.deadline || '',
-                    data_book_status: '待完成'
-                };
-                const result = await callYesApi('App.Table.Create', params);
-                return { id: result.id, ...data, status: '待完成' };
+                const sql = `INSERT INTO tasks (fromPersonld, toPersonld, content, deadline, book_status, add_time) VALUES ('${data.fromPersonId}', '${data.toPersonId}', '${data.content}', '${data.deadline || ''}', '待完成', NOW())`;
+                const result = await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                return { id: result.insert_id, ...data, status: '待完成' };
             },
 
             async updateTask(id, data) {
-                await callYesApi('App.Table.Update', {
-                    model_name: 'tasks',
-                    id: id,
-                    data_book_status: data.status
-                });
+                const sql = `UPDATE tasks SET book_status = '${data.status}' WHERE id = ${id}`;
+                await callYesApi('App.SuperTable.FreeUpdate', { sql });
                 return true;
             }
         };
@@ -996,6 +984,7 @@
             searchKeyword: '',
 
             async init() {
+                console.log('🚀 初始化应用（直连版）...');
                 await this.syncData();
                 this.renderAll();
                 setInterval(() => this.syncData(), 5000);
@@ -1017,7 +1006,7 @@
                     this.renderAll();
                     document.getElementById('syncStatus').textContent = '🟢 在线';
                 } catch (e) {
-                    console.warn('同步失败，使用本地缓存', e);
+                    console.warn('⚠️ 同步失败', e);
                     document.getElementById('syncStatus').textContent = '⚠️ 同步失败';
                     document.getElementById('syncStatus').className = 'status-indicator offline';
                 }
@@ -1061,7 +1050,6 @@
                 return div.innerHTML;
             },
 
-            // ---- 项目大屏 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
@@ -1146,7 +1134,6 @@
                 document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
             },
 
-            // ---- 任务清单 ----
             renderTaskList() {
                 const sel = document.getElementById('taskListFilter');
                 const personId = sel.value;
@@ -1158,13 +1145,13 @@
                     return;
                 }
 
-                const person = this.persons.find(p => p.id === personId);
+                const person = this.persons.find(p => p.id == personId);
                 if (!person) {
                     container.innerHTML = `<p style="color:#94a3b8;text-align:center;padding:30px 0;">该小人不存在</p>`;
                     return;
                 }
 
-                const tasks = this.tasks.filter(t => t.toPersonld === personId);
+                const tasks = this.tasks.filter(t => t.toPersonld == personId);
                 if (tasks.length === 0) {
                     container.innerHTML =
                         `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.personname)} 暂无任务</p>`;
@@ -1189,7 +1176,7 @@
                     if (items.length === 0) return '';
                     let html = `<div style="margin-top:16px;"><span class="task-group-title">${emoji} ${title} (${items.length})</span></div>`;
                     items.forEach(t => {
-                        const from = this.persons.find(p => p.id === t.fromPersonld);
+                        const from = this.persons.find(p => p.id == t.fromPersonld);
                         const fromName = from ? from.personname : '已删除';
                         const deadlineDisplay = t.deadline ? this._formatDateTime(t.deadline) : '⏳ 无时限';
                         const isDone = t.book_status === '已完成';
@@ -1223,7 +1210,6 @@
                 container.innerHTML = html;
             },
 
-            // ---- 小人相关 ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1454,11 +1440,14 @@
         //  5. UI 辅助
         // ================================================================
         function showModal(id) {
-            document.getElementById(id).classList.add('active');
+            const el = document.getElementById(id);
+            if (el) el.classList.add('active');
+            else console.error('❌ 找不到模态框:', id);
         }
 
         function hideModal(id) {
-            document.getElementById(id).classList.remove('active');
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('active');
         }
 
         document.querySelectorAll('.modal-overlay').forEach(el => {
@@ -1487,7 +1476,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（完整版 + 签名）');
+        console.log('🚀 任务平台已启动（直连版）');
     </script>
 </body>
 </html>
