@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>✨ 任务协作平台（直连版）</title>
+    <title>✨ 任务协作平台（直连 SQL）</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js">
     </script>
     <style>
-        /* ===== 样式同前，完整保留 ===== */
+        /* ===== 完整样式 ===== */
         * {
             margin: 0;
             padding: 0;
@@ -847,9 +847,6 @@
     <!-- ===== Toast ===== -->
     <div class="toast" id="toast"></div>
 
-    <!-- ============================================================ -->
-    <!-- JavaScript（使用直连接口） -->
-    <!-- ============================================================ -->
     <script>
         // ================================================================
         //  1. YesApi 配置
@@ -866,12 +863,7 @@
         }
 
         async function callYesApi(service, params = {}) {
-            const allParams = {
-                s: service,
-                app_key: APP_KEY,
-                ...params
-            };
-            // 生成签名
+            const allParams = { s: service, app_key: APP_KEY, ...params };
             const sortedKeys = Object.keys(allParams).sort();
             let signStr = '';
             sortedKeys.forEach(key => {
@@ -880,7 +872,8 @@
             });
             signStr = signStr.slice(0, -1);
             signStr += APP_SECRET;
-            allParams.sign = md5(signStr);
+            const sign = md5(signStr);
+            allParams.sign = sign;
 
             const url = API_BASE + '?' + new URLSearchParams(allParams);
             console.log(`📤 请求 ${service}:`, url);
@@ -901,28 +894,27 @@
         }
 
         // ================================================================
-        //  3. 数据存储层（使用直连接口）
+        //  3. 数据存储层（直连 SQL）
         // ================================================================
         const Store = {
             async loadAllData() {
                 try {
-                    // 使用直连接口查询，不依赖表单结构
                     const [projects, persons, tasks] = await Promise.all([
-                        callYesApi('App.SuperTable.FreeQuery', {
-                            sql: 'SELECT * FROM projects ORDER BY id DESC'
-                        }),
-                        callYesApi('App.SuperTable.FreeQuery', {
-                            sql: 'SELECT * FROM persons ORDER BY id DESC'
-                        }),
-                        callYesApi('App.SuperTable.FreeQuery', {
-                            sql: 'SELECT * FROM tasks ORDER BY id DESC'
-                        })
+                        callYesApi('App.SuperTable.SqlQuery', { sql: 'SELECT * FROM projects ORDER BY id DESC' }),
+                        callYesApi('App.SuperTable.SqlQuery', { sql: 'SELECT * FROM persons ORDER BY id DESC' }),
+                        callYesApi('App.SuperTable.SqlQuery', { sql: 'SELECT * FROM tasks ORDER BY id DESC' })
                     ]);
-                    // 提取数据（直连接口返回 data.list）
-                    const projList = projects.list || projects.data || [];
-                    const persList = persons.list || persons.data || [];
-                    const taskList = tasks.list || tasks.data || [];
-                    console.log(`✅ 直连查询结果: 项目 ${projList.length} 个, 小人 ${persList.length} 个, 任务 ${taskList.length} 个`);
+                    const extract = (data) => {
+                        if (!data) return [];
+                        if (Array.isArray(data)) return data;
+                        if (data.list) return data.list;
+                        if (data.data) return Array.isArray(data.data) ? data.data : [];
+                        return [];
+                    };
+                    const projList = extract(projects);
+                    const persList = extract(persons);
+                    const taskList = extract(tasks);
+                    console.log(`✅ 解析完成: 项目 ${projList.length} 个, 小人 ${persList.length} 个, 任务 ${taskList.length} 个`);
                     return { projects: projList, persons: persList, tasks: taskList };
                 } catch (e) {
                     console.error('❌ 加载数据失败', e);
@@ -930,52 +922,53 @@
                 }
             },
 
-            // 创建项目（使用直连接口）
             async addProject(data) {
-                const sql = `INSERT INTO projects (item_name, startDate, endDate, requirements, add_time) VALUES ('${data.name}', '${data.startDate || ''}', '${data.endDate || ''}', '${data.requirements || ''}', NOW())`;
-                const result = await callYesApi('App.SuperTable.FreeUpdate', { sql });
-                return { id: result.insert_id, ...data };
+                const sql =
+                    `INSERT INTO projects (item_name, startDate, endDate, requirements, add_time) VALUES ('${data.name}', '${data.startDate || ''}', '${data.endDate || ''}', '${data.requirements || ''}', NOW())`;
+                const result = await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
+                return { id: result.insert_id || Date.now(), ...data };
             },
 
             async deleteProject(id) {
                 const sql = `DELETE FROM projects WHERE id = ${id}`;
-                await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
                 return true;
             },
 
             async addPerson(data) {
                 const sql = `INSERT INTO persons (personname, add_time) VALUES ('${data.name}', NOW())`;
-                const result = await callYesApi('App.SuperTable.FreeUpdate', { sql });
-                return { id: result.insert_id, ...data };
+                const result = await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
+                return { id: result.insert_id || Date.now(), ...data };
             },
 
             async updatePerson(id, data) {
                 const sql = `UPDATE persons SET personname = '${data.name}' WHERE id = ${id}`;
-                await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
                 return true;
             },
 
             async deletePerson(id) {
                 const sql = `DELETE FROM persons WHERE id = ${id}`;
-                await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
                 return true;
             },
 
             async addTask(data) {
-                const sql = `INSERT INTO tasks (fromPersonld, toPersonld, content, deadline, book_status, add_time) VALUES ('${data.fromPersonId}', '${data.toPersonId}', '${data.content}', '${data.deadline || ''}', '待完成', NOW())`;
-                const result = await callYesApi('App.SuperTable.FreeUpdate', { sql });
-                return { id: result.insert_id, ...data, status: '待完成' };
+                const sql =
+                    `INSERT INTO tasks (fromPersonld, toPersonld, content, deadline, book_status, add_time) VALUES ('${data.fromPersonId}', '${data.toPersonId}', '${data.content}', '${data.deadline || ''}', '待完成', NOW())`;
+                const result = await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
+                return { id: result.insert_id || Date.now(), ...data, status: '待完成' };
             },
 
             async updateTask(id, data) {
                 const sql = `UPDATE tasks SET book_status = '${data.status}' WHERE id = ${id}`;
-                await callYesApi('App.SuperTable.FreeUpdate', { sql });
+                await callYesApi('App.SuperTable.ICanDolt', { sql: sql });
                 return true;
             }
         };
 
         // ================================================================
-        //  4. 应用主逻辑（完整版）
+        //  4. 应用主逻辑
         // ================================================================
         const App = {
             projects: [],
@@ -984,7 +977,7 @@
             searchKeyword: '',
 
             async init() {
-                console.log('🚀 初始化应用（直连版）...');
+                console.log('🚀 初始化应用...');
                 await this.syncData();
                 this.renderAll();
                 setInterval(() => this.syncData(), 5000);
@@ -1145,13 +1138,13 @@
                     return;
                 }
 
-                const person = this.persons.find(p => p.id == personId);
+                const person = this.persons.find(p => p.id === personId);
                 if (!person) {
                     container.innerHTML = `<p style="color:#94a3b8;text-align:center;padding:30px 0;">该小人不存在</p>`;
                     return;
                 }
 
-                const tasks = this.tasks.filter(t => t.toPersonld == personId);
+                const tasks = this.tasks.filter(t => t.toPersonld === personId);
                 if (tasks.length === 0) {
                     container.innerHTML =
                         `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.personname)} 暂无任务</p>`;
@@ -1176,7 +1169,7 @@
                     if (items.length === 0) return '';
                     let html = `<div style="margin-top:16px;"><span class="task-group-title">${emoji} ${title} (${items.length})</span></div>`;
                     items.forEach(t => {
-                        const from = this.persons.find(p => p.id == t.fromPersonld);
+                        const from = this.persons.find(p => p.id === t.fromPersonld);
                         const fromName = from ? from.personname : '已删除';
                         const deadlineDisplay = t.deadline ? this._formatDateTime(t.deadline) : '⏳ 无时限';
                         const isDone = t.book_status === '已完成';
@@ -1442,7 +1435,7 @@
         function showModal(id) {
             const el = document.getElementById(id);
             if (el) el.classList.add('active');
-            else console.error('❌ 找不到模态框:', id);
+            else console.error('找不到模态框:', id);
         }
 
         function hideModal(id) {
@@ -1476,7 +1469,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动（直连版）');
+        console.log('🚀 任务平台已启动（直连 SQL 版）');
     </script>
 </body>
 </html>
