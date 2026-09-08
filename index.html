@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>✨ 任务协作平台（YesApi）</title>
     <style>
-        /* ===== 全局样式 ===== */
+        /* ===== 样式与前一致，为节省篇幅略，实际使用请保留完整样式 ===== */
         * {
             margin: 0;
             padding: 0;
@@ -846,17 +846,21 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (集成 YesApi 果创云，多端同步) -->
+    <!-- JavaScript (适配你现有字段名) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
-        //  1. YesApi 配置（请替换为你自己的）
+        //  1. YesApi 配置（已从你的截图获取）
         // ================================================================
-       const APP_KEY = '48840E74CC44E952482803AF2B5D7393';
+        const APP_KEY = '48840E74CC44E952482803AF2B5D7393';
         const API_BASE = 'http://hn.api.yesapi.net/';
 
-        // 通用 API 调用函数
+        // 通用 API 调用函数（增加 where 参数）
         async function callYesApi(service, params = {}) {
+            // 强制为 Query 接口添加 where 参数
+            if (service === 'App.Table.Query' && !params.where) {
+                params.where = '{}';
+            }
             const query = new URLSearchParams({
                 s: service,
                 app_key: APP_KEY,
@@ -879,10 +883,9 @@
         }
 
         // ================================================================
-        //  2. 数据存储层（基于 YesApi）
+        //  2. 数据存储层（适配字段名）
         // ================================================================
         const Store = {
-            // 加载所有数据
             async loadAllData() {
                 try {
                     const [projects, persons, tasks] = await Promise.all([
@@ -890,7 +893,7 @@
                         callYesApi('App.Table.Query', { model_name: 'persons' }),
                         callYesApi('App.Table.Query', { model_name: 'tasks' })
                     ]);
-                    // 注意：YesApi 返回的数据可能包含 list 字段，请根据实际调整
+                    // 注意数据结构：可能 data.list 或 data.data，兼容处理
                     const projList = projects.list || projects.data || [];
                     const persList = persons.list || persons.data || [];
                     const taskList = tasks.list || tasks.data || [];
@@ -901,11 +904,11 @@
                 }
             },
 
-            // 创建项目
+            // 创建项目 - 映射字段名
             async addProject(data) {
                 const params = {
                     model_name: 'projects',
-                    data_name: data.name,
+                    data_item_name: data.name,        // 对应字段 item_name
                     data_startDate: data.startDate || '',
                     data_endDate: data.endDate || '',
                     data_requirements: data.requirements || ''
@@ -914,65 +917,59 @@
                 return { id: result.id, ...data };
             },
 
-            // 删除项目
             async deleteProject(id) {
                 await callYesApi('App.Table.Delete', { model_name: 'projects', id: id });
                 return true;
             },
 
-            // 创建小人
             async addPerson(data) {
                 const params = {
                     model_name: 'persons',
-                    data_name: data.name
+                    data_personname: data.name        // 对应字段 personname
                 };
                 const result = await callYesApi('App.Table.Create', params);
                 return { id: result.id, ...data };
             },
 
-            // 更新小人
             async updatePerson(id, data) {
                 await callYesApi('App.Table.Update', {
                     model_name: 'persons',
                     id: id,
-                    data_name: data.name
+                    data_personname: data.name
                 });
                 return true;
             },
 
-            // 删除小人
             async deletePerson(id) {
                 await callYesApi('App.Table.Delete', { model_name: 'persons', id: id });
                 return true;
             },
 
-            // 创建任务
             async addTask(data) {
                 const params = {
                     model_name: 'tasks',
-                    data_fromPersonId: data.fromPersonId,
+                    data_fromPersonId: data.fromPersonId,   // 字段名 fromPersonId（注意大小写）
                     data_toPersonId: data.toPersonId,
                     data_content: data.content,
                     data_deadline: data.deadline || '',
-                    data_status: '待完成'
+                    data_book_status: '待完成'               // 字段名 book_status
                 };
                 const result = await callYesApi('App.Table.Create', params);
                 return { id: result.id, ...data, status: '待完成' };
             },
 
-            // 更新任务（例如标记完成）
             async updateTask(id, data) {
                 await callYesApi('App.Table.Update', {
                     model_name: 'tasks',
                     id: id,
-                    data_status: data.status
+                    data_book_status: data.status        // 状态字段 book_status
                 });
                 return true;
             }
         };
 
         // ================================================================
-        //  3. 应用主逻辑
+        //  3. 应用主逻辑 (完全沿用之前的渲染逻辑，字段读取时映射)
         // ================================================================
         const App = {
             projects: [],
@@ -980,15 +977,11 @@
             tasks: [],
             searchKeyword: '',
 
-            // 初始化
             async init() {
                 await this.syncData();
                 this.renderAll();
-                // 定时轮询（每5秒）实现多端同步
                 setInterval(() => this.syncData(), 5000);
-                // 每分钟刷新项目状态
                 setInterval(() => this.renderProjects(), 60000);
-                // 搜索框
                 document.getElementById('projectSearch').addEventListener('input', (e) => {
                     this.searchKeyword = e.target.value.trim();
                     this.renderProjects();
@@ -997,36 +990,31 @@
                 document.getElementById('syncStatus').textContent = '🟢 在线';
             },
 
-            // 从云端同步数据
             async syncData() {
                 try {
                     const data = await Store.loadAllData();
                     this.projects = data.projects;
                     this.persons = data.persons;
                     this.tasks = data.tasks;
-                    // 更新所有视图
                     this.renderAll();
                     document.getElementById('syncStatus').textContent = '🟢 在线';
                 } catch (e) {
-                    console.warn('同步失败，使用本地缓存', e);
+                    console.warn('同步失败', e);
                     document.getElementById('syncStatus').textContent = '⚠️ 同步失败';
                     document.getElementById('syncStatus').className = 'status-indicator offline';
                 }
             },
 
-            // 渲染所有组件
             renderAll() {
                 this.renderProjects();
                 this.renderPersonsAndSelects();
                 this.renderPersonManage();
                 this.updateCounts();
-                // 如果任务清单打开，刷新
                 if (document.getElementById('taskListModal').classList.contains('active')) {
                     this.renderTaskList();
                 }
             },
 
-            // 格式化日期
             _formatDateTime(dateStr) {
                 if (!dateStr) return null;
                 try {
@@ -1044,7 +1032,6 @@
                 }
             },
 
-            // 转义 HTML
             _escape(str) {
                 if (!str) return '';
                 const div = document.createElement('div');
@@ -1052,15 +1039,21 @@
                 return div.innerHTML;
             },
 
-            // ---- 项目大屏 ----
+            // ---- 项目大屏（读取 item_name 作为 name） ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
                 const keyword = this.searchKeyword.toLowerCase();
 
-                let filtered = this.projects;
+                // 将 item_name 映射为 name，方便后续处理
+                const mappedProjects = this.projects.map(p => ({
+                    ...p,
+                    name: p.item_name || p.name || ''
+                }));
+
+                let filtered = mappedProjects;
                 if (keyword) {
-                    filtered = this.projects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
+                    filtered = mappedProjects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
                 }
 
                 if (filtered.length === 0) {
@@ -1074,7 +1067,6 @@
                     return;
                 }
 
-                // 分组
                 const groups = { pending: [], open: [], closed: [], undefined: [] };
                 filtered.forEach(p => {
                     const start = p.startDate ? new Date(p.startDate) : null;
@@ -1090,7 +1082,6 @@
                     groups[status].push(p);
                 });
 
-                // 排序：按结束时间升序
                 const sortByEnd = (a, b) => {
                     const endA = a.endDate ? new Date(a.endDate) : new Date(8640000000000000);
                     const endB = b.endDate ? new Date(b.endDate) : new Date(8640000000000000);
@@ -1160,14 +1151,14 @@
                 const tasks = this.tasks.filter(t => t.toPersonId === personId);
                 if (tasks.length === 0) {
                     container.innerHTML =
-                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.name)} 暂无任务</p>`;
+                        `<p style="color:#94a3b8;text-align:center;padding:30px 0;">📭 ${this._escape(person.personname || person.name)} 暂无任务</p>`;
                     return;
                 }
 
-                const pending = tasks.filter(t => t.status !== '已完成');
-                const done = tasks.filter(t => t.status === '已完成');
+                // 任务状态字段是 book_status
+                const pending = tasks.filter(t => t.book_status !== '已完成');
+                const done = tasks.filter(t => t.book_status === '已完成');
 
-                // 排序：未完成按截止时间升序（紧迫），已完成按截止时间降序
                 pending.sort((a, b) => {
                     if (!a.deadline) return 1;
                     if (!b.deadline) return -1;
@@ -1184,9 +1175,9 @@
                     let html = `<div style="margin-top:16px;"><span class="task-group-title">${emoji} ${title} (${items.length})</span></div>`;
                     items.forEach(t => {
                         const from = this.persons.find(p => p.id === t.fromPersonId);
-                        const fromName = from ? from.name : '已删除';
+                        const fromName = from ? (from.personname || from.name) : '已删除';
                         const deadlineDisplay = t.deadline ? this._formatDateTime(t.deadline) : '⏳ 无时限';
-                        const isDone = t.status === '已完成';
+                        const isDone = t.book_status === '已完成';
                         const detailId = 'taskDetail_' + t.id;
                         html += `
                             <div class="task-item" onclick="App.toggleTaskDetail('${detailId}')">
@@ -1211,13 +1202,14 @@
                     return html;
                 };
 
-                let html = `<div style="margin-bottom:8px;font-weight:700;font-size:18px;">🧑 ${this._escape(person.name)} 的任务</div>`;
+                const personName = person.personname || person.name || '未知';
+                let html = `<div style="margin-bottom:8px;font-weight:700;font-size:18px;">🧑 ${this._escape(personName)} 的任务</div>`;
                 html += renderItems(pending, '未完成', '⏳');
                 html += renderItems(done, '已完成', '✅');
                 container.innerHTML = html;
             },
 
-            // ---- 小人相关渲染 ----
+            // ---- 小人相关渲染（persons 表字段 personname） ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1234,10 +1226,11 @@
                 let html = '';
                 this.persons.forEach((p, idx) => {
                     const color = colors[idx % colors.length];
+                    const name = p.personname || p.name || '';
                     html += `
                         <span class="小人标签" title="点击查看任务清单" onclick="App.viewTaskList('${p.id}')">
                             <span class="dot" style="background:${color};"></span>
-                            ${this._escape(p.name)}
+                            ${this._escape(name)}
                         </span>
                     `;
                 });
@@ -1248,18 +1241,20 @@
             renderTaskSelects() {
                 const fromSel = document.getElementById('taskFrom');
                 const toSel = document.getElementById('taskTo');
-                const options = this.persons.map(p =>
-                    `<option value="${p.id}">${this._escape(p.name)}</option>`
-                ).join('');
+                const options = this.persons.map(p => {
+                    const name = p.personname || p.name || '';
+                    return `<option value="${p.id}">${this._escape(name)}</option>`;
+                }).join('');
                 fromSel.innerHTML = options;
                 toSel.innerHTML = options;
             },
 
             renderTaskListFilter() {
                 const sel = document.getElementById('taskListFilter');
-                const options = this.persons.map(p =>
-                    `<option value="${p.id}">${this._escape(p.name)}</option>`
-                ).join('');
+                const options = this.persons.map(p => {
+                    const name = p.personname || p.name || '';
+                    return `<option value="${p.id}">${this._escape(name)}</option>`;
+                }).join('');
                 sel.innerHTML = `<option value="">-- 请选择 --</option>` + options;
             },
 
@@ -1271,10 +1266,11 @@
                 }
                 let html = '';
                 this.persons.forEach(p => {
+                    const name = p.personname || p.name || '';
                     html += `
                         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;background:#f8fafc;padding:10px 16px;border-radius:14px;">
-                            <span style="font-weight:600;min-width:32px;">${this._escape(p.name)}</span>
-                            <input type="text" value="${this._escape(p.name)}" 
+                            <span style="font-weight:600;min-width:32px;">${this._escape(name)}</span>
+                            <input type="text" value="${this._escape(name)}" 
                                    style="flex:1;padding:8px 12px;border:2px solid #e2e8f0;border-radius:12px;font-size:14px;background:white;"
                                    onchange="App.updatePersonName('${p.id}', this.value)" />
                             <button class="btn btn-danger btn-xs" onclick="App.deletePerson('${p.id}')">删除</button>
@@ -1286,10 +1282,10 @@
 
             updateCounts() {
                 const keyword = this.searchKeyword.toLowerCase();
-                let count = this.projects;
-                if (keyword) {
-                    count = this.projects.filter(p => p.name && p.name.toLowerCase().includes(keyword));
-                }
+                let count = this.projects.filter(p => {
+                    const name = p.item_name || p.name || '';
+                    return keyword ? name.toLowerCase().includes(keyword) : true;
+                });
                 document.getElementById('projectCount').textContent = `${count.length} 个项目`;
                 document.getElementById('小人Count').textContent = this.persons.length;
             },
@@ -1336,7 +1332,7 @@
                     toast('请输入小人名称', 'error');
                     return;
                 }
-                if (this.persons.some(p => p.name === name)) {
+                if (this.persons.some(p => (p.personname || p.name) === name)) {
                     toast('该名称已存在，请换一个', 'error');
                     return;
                 }
@@ -1357,7 +1353,7 @@
                     toast('名称不能为空', 'error');
                     return;
                 }
-                if (this.persons.some(p => p.id !== id && p.name === newName)) {
+                if (this.persons.some(p => p.id !== id && (p.personname || p.name) === newName)) {
                     toast('该名称已存在', 'error');
                     return;
                 }
@@ -1479,7 +1475,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动 (YesApi 果创云版)');
+        console.log('🚀 任务平台已启动 (适配你的表单字段)');
     </script>
 </body>
 </html>
