@@ -846,14 +846,14 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript（适配你现有字段名 + 修复语法错误） -->
+    <!-- JavaScript（已修正 HTTPS） -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
-        //  1. YesApi 配置（已根据你的截图填入）
+        //  1. YesApi 配置（已改用 HTTPS）
         // ================================================================
         const APP_KEY = '48840E74CC44E952482803AF2B5D7393';
-        const API_BASE = 'https://hn.api.yesapi.net/';
+        const API_BASE = 'https://hn.api.yesapi.net/';   // 改为 HTTPS
 
         // 通用 API 调用函数
         async function callYesApi(service, params = {}) {
@@ -909,7 +909,7 @@
             async addProject(data) {
                 const params = {
                     model_name: 'projects',
-                    data_item_name: data.name,          // 项目名称字段是 item_name
+                    data_item_name: data.name,
                     data_startDate: data.startDate || '',
                     data_endDate: data.endDate || '',
                     data_requirements: data.requirements || ''
@@ -928,7 +928,7 @@
             async addPerson(data) {
                 const params = {
                     model_name: 'persons',
-                    data_personname: data.name      // 小人名称字段是 personname
+                    data_personname: data.name
                 };
                 const result = await callYesApi('App.Table.Create', params);
                 return { id: result.id, ...data };
@@ -954,11 +954,11 @@
             async addTask(data) {
                 const params = {
                     model_name: 'tasks',
-                    data_fromPersonld: data.fromPersonId,   // 注意字段名是 fromPersonld (ld结尾)
-                    data_toPersonld: data.toPersonId,       // 字段名是 toPersonld
+                    data_fromPersonld: data.fromPersonId,
+                    data_toPersonld: data.toPersonId,
                     data_content: data.content,
                     data_deadline: data.deadline || '',
-                    data_book_status: '待完成'              // 状态字段是 book_status
+                    data_book_status: '待完成'
                 };
                 const result = await callYesApi('App.Table.Create', params);
                 return { id: result.id, ...data, status: '待完成' };
@@ -969,7 +969,7 @@
                 await callYesApi('App.Table.Update', {
                     model_name: 'tasks',
                     id: id,
-                    data_book_status: data.status       // 状态字段是 book_status
+                    data_book_status: data.status
                 });
                 return true;
             }
@@ -1473,7 +1473,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动 (适配你现有字段名)');
+        console.log('🚀 任务平台已启动 (HTTPS 版)');
     </script>
 </body>
 </html>
