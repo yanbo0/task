@@ -3,14 +3,9 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>✨ 任务协作平台</title>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js">
-    </script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js">
-    </script>
+    <title>✨ 任务协作平台（YesApi）</title>
     <style>
-        /* 样式与前一致，为节省篇幅此处略（请从上一版完整复制） */
-        /* 为确保完整，此处包含完整样式 */
+        /* ===== 全局样式 ===== */
         * {
             margin: 0;
             padding: 0;
@@ -851,269 +846,133 @@
     <div class="toast" id="toast"></div>
 
     <!-- ============================================================ -->
-    <!-- JavaScript (彻底解决数据覆盖问题) -->
+    <!-- JavaScript (集成 YesApi 果创云，多端同步) -->
     <!-- ============================================================ -->
     <script>
         // ================================================================
-        //  1. Firebase 配置 (请务必替换为你自己的配置)
+        //  1. YesApi 配置（请替换为你自己的）
         // ================================================================
-        const firebaseConfig = {
-            apiKey: "AIzaSyB6x7tX9Y8Z3a4b5c6d7e8f9g0h1i2j3k4l5m6n",
-            authDomain: "your-project.firebaseapp.com",
-            projectId: "your-project",
-            storageBucket: "your-project.appspot.com",
-            messagingSenderId: "123456789012",
-            appId: "1:123456789012:web:abcdef123456"
-        };
+        const APP_KEY = '你的AppKey'; // 从 YesApi 控制台获取
+        const API_BASE = 'https://api.yesapi.cn/'; // 你的接口域名
 
-        let useFirebase = false;
-        let db = null;
-        try {
-            firebase.initializeApp(firebaseConfig);
-            db = firebase.firestore();
-            useFirebase = true;
-            console.log('✅ Firebase 初始化成功');
-            document.getElementById('syncStatus').textContent = '🟢 在线';
-        } catch (e) {
-            console.warn('⚠️ Firebase 初始化失败，数据仅存储于当前浏览器 (无法跨设备同步)', e);
-            document.getElementById('syncStatus').textContent = '⚠️ 离线模式';
-            document.getElementById('syncStatus').className = 'status-indicator offline';
+        // 通用 API 调用函数
+        async function callYesApi(service, params = {}) {
+            const query = new URLSearchParams({
+                s: service,
+                app_key: APP_KEY,
+                ...params
+            });
+            const url = API_BASE + '?' + query;
+            try {
+                const response = await fetch(url);
+                const result = await response.json();
+                if (result.ret === 200) {
+                    return result.data;
+                } else {
+                    console.error('API 错误:', result);
+                    throw new Error(result.msg || '调用失败');
+                }
+            } catch (e) {
+                console.error('网络请求失败:', e);
+                throw e;
+            }
         }
 
         // ================================================================
-        //  2. 数据存储层 (使用 Firestore add() 自动生成 ID)
+        //  2. 数据存储层（基于 YesApi）
         // ================================================================
         const Store = {
-            _localData: { projects: [], persons: [], tasks: [] },
-            _listeners: [],
-
-            init() {
-                this._loadLocal();
-                if (useFirebase) {
-                    this._startRealtimeListeners();
-                } else {
-                    this._ensureDefaultPersons();
-                }
-            },
-
-            _loadLocal() {
+            // 加载所有数据
+            async loadAllData() {
                 try {
-                    const raw = localStorage.getItem('taskPlatformData');
-                    if (raw) this._localData = JSON.parse(raw);
-                } catch (e) { /* ignore */ }
-            },
-            _saveLocal() {
-                try {
-                    localStorage.setItem('taskPlatformData', JSON.stringify(this._localData));
-                } catch (e) { /* ignore */ }
-            },
-
-            _ensureDefaultPersons() {
-                if (this._localData.persons.length === 0) {
-                    ['a', 'b', 'c', 'd'].forEach(name => {
-                        this._localData.persons.push({
-                            id: 'per_' + Date.now() + Math.random().toString(36).slice(2),
-                            name,
-                            createdAt: new Date().toISOString()
-                        });
-                    });
-                    this._saveLocal();
+                    const [projects, persons, tasks] = await Promise.all([
+                        callYesApi('App.Table.Query', { model_name: 'projects' }),
+                        callYesApi('App.Table.Query', { model_name: 'persons' }),
+                        callYesApi('App.Table.Query', { model_name: 'tasks' })
+                    ]);
+                    // 注意：YesApi 返回的数据可能包含 list 字段，请根据实际调整
+                    const projList = projects.list || projects.data || [];
+                    const persList = persons.list || persons.data || [];
+                    const taskList = tasks.list || tasks.data || [];
+                    return { projects: projList, persons: persList, tasks: taskList };
+                } catch (e) {
+                    console.error('加载数据失败', e);
+                    return { projects: [], persons: [], tasks: [] };
                 }
             },
 
-            _startRealtimeListeners() {
-                const unsubProjects = db.collection('projects')
-                    .onSnapshot(snapshot => {
-                        const projects = [];
-                        snapshot.forEach(doc => {
-                            projects.push({ id: doc.id, ...doc.data() });
-                        });
-                        this._localData.projects = projects;
-                        this._saveLocal();
-                        if (App) App.onDataUpdate('projects', projects);
-                        this._updateSyncStatus('online');
-                    }, error => {
-                        console.warn('Projects 监听错误', error);
-                        this._updateSyncStatus('error');
-                    });
-
-                const unsubPersons = db.collection('persons')
-                    .onSnapshot(snapshot => {
-                        const persons = [];
-                        snapshot.forEach(doc => {
-                            persons.push({ id: doc.id, ...doc.data() });
-                        });
-                        this._localData.persons = persons;
-                        this._saveLocal();
-                        if (App) App.onDataUpdate('persons', persons);
-                    }, error => console.warn('Persons 监听错误', error));
-
-                const unsubTasks = db.collection('tasks')
-                    .onSnapshot(snapshot => {
-                        const tasks = [];
-                        snapshot.forEach(doc => {
-                            tasks.push({ id: doc.id, ...doc.data() });
-                        });
-                        this._localData.tasks = tasks;
-                        this._saveLocal();
-                        if (App) App.onDataUpdate('tasks', tasks);
-                    }, error => console.warn('Tasks 监听错误', error));
-
-                this._listeners = [unsubProjects, unsubPersons, unsubTasks];
-                console.log('👂 实时监听已开启');
-            },
-
-            _updateSyncStatus(state) {
-                const el = document.getElementById('syncStatus');
-                if (state === 'online') {
-                    el.textContent = '🟢 在线';
-                    el.className = 'status-indicator';
-                } else if (state === 'offline') {
-                    el.textContent = '⚠️ 离线';
-                    el.className = 'status-indicator offline';
-                } else {
-                    el.textContent = '🔴 连接错误';
-                    el.className = 'status-indicator error';
-                }
-            },
-
-            // ---- 新增数据：使用 Firestore add() ----
+            // 创建项目
             async addProject(data) {
-                const payload = { ...data, createdAt: new Date().toISOString() };
-                if (useFirebase) {
-                    try {
-                        const docRef = await db.collection('projects').add(payload);
-                        const newItem = { id: docRef.id, ...payload };
-                        this._localData.projects.unshift(newItem);
-                        this._saveLocal();
-                        console.log('✅ 项目已添加，ID:', docRef.id);
-                        return newItem;
-                    } catch (e) {
-                        console.error('Firebase 添加项目失败', e);
-                        return this._addLocal('projects', payload);
-                    }
-                } else {
-                    return this._addLocal('projects', payload);
-                }
+                const params = {
+                    model_name: 'projects',
+                    data_name: data.name,
+                    data_startDate: data.startDate || '',
+                    data_endDate: data.endDate || '',
+                    data_requirements: data.requirements || ''
+                };
+                const result = await callYesApi('App.Table.Create', params);
+                return { id: result.id, ...data };
             },
 
+            // 删除项目
             async deleteProject(id) {
-                this._localData.projects = this._localData.projects.filter(p => p.id !== id);
-                this._saveLocal();
-                if (useFirebase) {
-                    try {
-                        await db.collection('projects').doc(id).delete();
-                        console.log('🗑️ 项目已删除', id);
-                    } catch (e) {
-                        console.warn('删除项目失败', e);
-                    }
-                }
+                await callYesApi('App.Table.Delete', { model_name: 'projects', id: id });
                 return true;
             },
 
+            // 创建小人
             async addPerson(data) {
-                const payload = { ...data, createdAt: new Date().toISOString() };
-                if (useFirebase) {
-                    try {
-                        const docRef = await db.collection('persons').add(payload);
-                        const newItem = { id: docRef.id, ...payload };
-                        this._localData.persons.push(newItem);
-                        this._saveLocal();
-                        console.log('✅ 小人已添加，ID:', docRef.id);
-                        return newItem;
-                    } catch (e) {
-                        console.error('Firebase 添加小人失败', e);
-                        return this._addLocal('persons', payload);
-                    }
-                } else {
-                    return this._addLocal('persons', payload);
-                }
+                const params = {
+                    model_name: 'persons',
+                    data_name: data.name
+                };
+                const result = await callYesApi('App.Table.Create', params);
+                return { id: result.id, ...data };
             },
 
+            // 更新小人
             async updatePerson(id, data) {
-                const idx = this._localData.persons.findIndex(p => p.id === id);
-                if (idx !== -1) {
-                    this._localData.persons[idx] = { ...this._localData.persons[idx], ...data };
-                    this._saveLocal();
-                    if (useFirebase) {
-                        try {
-                            await db.collection('persons').doc(id).update(data);
-                            console.log('🔄 小人已更新', id);
-                        } catch (e) {
-                            console.warn('更新小人失败', e);
-                        }
-                    }
-                    return true;
-                }
-                return false;
-            },
-
-            async deletePerson(id) {
-                this._localData.persons = this._localData.persons.filter(p => p.id !== id);
-                this._saveLocal();
-                if (useFirebase) {
-                    try {
-                        await db.collection('persons').doc(id).delete();
-                        console.log('🗑️ 小人已删除', id);
-                    } catch (e) {
-                        console.warn('删除小人失败', e);
-                    }
-                }
+                await callYesApi('App.Table.Update', {
+                    model_name: 'persons',
+                    id: id,
+                    data_name: data.name
+                });
                 return true;
             },
 
+            // 删除小人
+            async deletePerson(id) {
+                await callYesApi('App.Table.Delete', { model_name: 'persons', id: id });
+                return true;
+            },
+
+            // 创建任务
             async addTask(data) {
-                const payload = { ...data, status: '待完成', createdAt: new Date().toISOString() };
-                if (useFirebase) {
-                    try {
-                        const docRef = await db.collection('tasks').add(payload);
-                        const newItem = { id: docRef.id, ...payload };
-                        this._localData.tasks.unshift(newItem);
-                        this._saveLocal();
-                        console.log('✅ 任务已添加，ID:', docRef.id);
-                        return newItem;
-                    } catch (e) {
-                        console.error('Firebase 添加任务失败', e);
-                        return this._addLocal('tasks', payload);
-                    }
-                } else {
-                    return this._addLocal('tasks', payload);
-                }
+                const params = {
+                    model_name: 'tasks',
+                    data_fromPersonId: data.fromPersonId,
+                    data_toPersonId: data.toPersonId,
+                    data_content: data.content,
+                    data_deadline: data.deadline || '',
+                    data_status: '待完成'
+                };
+                const result = await callYesApi('App.Table.Create', params);
+                return { id: result.id, ...data, status: '待完成' };
             },
 
+            // 更新任务（例如标记完成）
             async updateTask(id, data) {
-                const idx = this._localData.tasks.findIndex(t => t.id === id);
-                if (idx !== -1) {
-                    this._localData.tasks[idx] = { ...this._localData.tasks[idx], ...data };
-                    this._saveLocal();
-                    if (useFirebase) {
-                        try {
-                            await db.collection('tasks').doc(id).update(data);
-                            console.log('🔄 任务已更新', id);
-                        } catch (e) {
-                            console.warn('更新任务失败', e);
-                        }
-                    }
-                    return true;
-                }
-                return false;
-            },
-
-            _addLocal(collection, payload) {
-                const id = 'local_' + Date.now() + Math.random().toString(36).slice(2);
-                const item = { id, ...payload };
-                this._localData[collection].unshift(item);
-                this._saveLocal();
-                return item;
-            },
-
-            getProjects() { return this._localData.projects || []; },
-            getPersons() { return this._localData.persons || []; },
-            getTasks() { return this._localData.tasks || []; }
+                await callYesApi('App.Table.Update', {
+                    model_name: 'tasks',
+                    id: id,
+                    data_status: data.status
+                });
+                return true;
+            }
         };
 
         // ================================================================
-        //  3. 应用主逻辑 (与之前相同)
+        //  3. 应用主逻辑
         // ================================================================
         const App = {
             projects: [],
@@ -1121,50 +980,53 @@
             tasks: [],
             searchKeyword: '',
 
-            init() {
-                Store.init();
-                this.projects = Store.getProjects();
-                this.persons = Store.getPersons();
-                this.tasks = Store.getTasks();
+            // 初始化
+            async init() {
+                await this.syncData();
                 this.renderAll();
-
+                // 定时轮询（每5秒）实现多端同步
+                setInterval(() => this.syncData(), 5000);
+                // 每分钟刷新项目状态
                 setInterval(() => this.renderProjects(), 60000);
-
-                const searchInput = document.getElementById('projectSearch');
-                searchInput.addEventListener('input', () => {
-                    this.searchKeyword = searchInput.value.trim();
+                // 搜索框
+                document.getElementById('projectSearch').addEventListener('input', (e) => {
+                    this.searchKeyword = e.target.value.trim();
                     this.renderProjects();
                     this.updateCounts();
                 });
+                document.getElementById('syncStatus').textContent = '🟢 在线';
             },
 
-            onDataUpdate(collection, data) {
-                console.log(`📥 收到 ${collection} 更新，共 ${data.length} 条`);
-                if (collection === 'projects') {
-                    this.projects = data;
-                    this.renderProjects();
-                    this.updateCounts();
-                } else if (collection === 'persons') {
-                    this.persons = data;
-                    this.renderPersonsAndSelects();
-                    this.renderPersonManage();
-                    this.updateCounts();
-                    const modal = document.getElementById('taskListModal');
-                    if (modal.classList.contains('active')) this.renderTaskList();
-                } else if (collection === 'tasks') {
-                    this.tasks = data;
-                    const modal = document.getElementById('taskListModal');
-                    if (modal.classList.contains('active')) this.renderTaskList();
+            // 从云端同步数据
+            async syncData() {
+                try {
+                    const data = await Store.loadAllData();
+                    this.projects = data.projects;
+                    this.persons = data.persons;
+                    this.tasks = data.tasks;
+                    // 更新所有视图
+                    this.renderAll();
+                    document.getElementById('syncStatus').textContent = '🟢 在线';
+                } catch (e) {
+                    console.warn('同步失败，使用本地缓存', e);
+                    document.getElementById('syncStatus').textContent = '⚠️ 同步失败';
+                    document.getElementById('syncStatus').className = 'status-indicator offline';
                 }
             },
 
+            // 渲染所有组件
             renderAll() {
                 this.renderProjects();
                 this.renderPersonsAndSelects();
                 this.renderPersonManage();
                 this.updateCounts();
+                // 如果任务清单打开，刷新
+                if (document.getElementById('taskListModal').classList.contains('active')) {
+                    this.renderTaskList();
+                }
             },
 
+            // 格式化日期
             _formatDateTime(dateStr) {
                 if (!dateStr) return null;
                 try {
@@ -1182,6 +1044,15 @@
                 }
             },
 
+            // 转义 HTML
+            _escape(str) {
+                if (!str) return '';
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            },
+
+            // ---- 项目大屏 ----
             renderProjects() {
                 const grid = document.getElementById('projectGrid');
                 const now = new Date();
@@ -1203,29 +1074,27 @@
                     return;
                 }
 
+                // 分组
                 const groups = { pending: [], open: [], closed: [], undefined: [] };
                 filtered.forEach(p => {
                     const start = p.startDate ? new Date(p.startDate) : null;
                     const end = p.endDate ? new Date(p.endDate) : null;
                     if (!start || !end) {
-                        groups.undefined.push({ ...p, _start: start, _end: end });
+                        groups.undefined.push(p);
                         return;
                     }
                     let status;
-                    if (now < start) {
-                        status = 'pending';
-                    } else if (now >= start && now <= end) {
-                        status = 'open';
-                    } else {
-                        status = 'closed';
-                    }
-                    groups[status].push({ ...p, _start: start, _end: end });
+                    if (now < start) status = 'pending';
+                    else if (now >= start && now <= end) status = 'open';
+                    else status = 'closed';
+                    groups[status].push(p);
                 });
 
+                // 排序：按结束时间升序
                 const sortByEnd = (a, b) => {
-                    if (!a._end) return 1;
-                    if (!b._end) return -1;
-                    return a._end - b._end;
+                    const endA = a.endDate ? new Date(a.endDate) : new Date(8640000000000000);
+                    const endB = b.endDate ? new Date(b.endDate) : new Date(8640000000000000);
+                    return endA - endB;
                 };
                 groups.pending.sort(sortByEnd);
                 groups.open.sort(sortByEnd);
@@ -1245,24 +1114,17 @@
                     if (items.length === 0) return;
                     html += `<div class="group-title">${statusMap[key].label} (${items.length})</div>`;
                     items.forEach(p => {
-                        let statusText = '';
-                        if (key === 'pending') statusText = '待申报';
-                        else if (key === 'open') statusText = '申报中';
-                        else if (key === 'closed') statusText = '已截止';
-                        else statusText = '时间未设定';
-
+                        const statusText = key === 'pending' ? '待申报' : key === 'open' ? '申报中' : key ===
+                            'closed' ? '已截止' : '时间未设定';
                         const startDisplay = this._formatDateTime(p.startDate);
                         const endDisplay = this._formatDateTime(p.endDate);
                         const timeDisplay = (startDisplay && endDisplay) ?
                             `📅 ${startDisplay}  ~  ${endDisplay}` :
                             '⏳ 时间未设定';
-
                         html += `
                             <div class="project-card">
                                 <div class="p-name">${this._escape(p.name)}</div>
-                                <div class="p-meta">
-                                    <span>${timeDisplay}</span>
-                                </div>
+                                <div class="p-meta"><span>${timeDisplay}</span></div>
                                 <div class="p-req">📌 ${this._escape(p.requirements || '无硬性要求')}</div>
                                 <span class="p-status ${statusMap[key].class}">${statusText}</span>
                                 <div class="p-actions">
@@ -1277,6 +1139,7 @@
                 document.getElementById('projectCount').textContent = `${filtered.length} 个项目`;
             },
 
+            // ---- 任务清单 ----
             renderTaskList() {
                 const sel = document.getElementById('taskListFilter');
                 const personId = sel.value;
@@ -1304,6 +1167,7 @@
                 const pending = tasks.filter(t => t.status !== '已完成');
                 const done = tasks.filter(t => t.status === '已完成');
 
+                // 排序：未完成按截止时间升序（紧迫），已完成按截止时间降序
                 pending.sort((a, b) => {
                     if (!a.deadline) return 1;
                     if (!b.deadline) return -1;
@@ -1324,7 +1188,6 @@
                         const deadlineDisplay = t.deadline ? this._formatDateTime(t.deadline) : '⏳ 无时限';
                         const isDone = t.status === '已完成';
                         const detailId = 'taskDetail_' + t.id;
-
                         html += `
                             <div class="task-item" onclick="App.toggleTaskDetail('${detailId}')">
                                 <div class="task-head">
@@ -1354,6 +1217,7 @@
                 container.innerHTML = html;
             },
 
+            // ---- 小人相关渲染 ----
             renderPersonsAndSelects() {
                 this.renderPersons();
                 this.renderTaskSelects();
@@ -1430,13 +1294,6 @@
                 document.getElementById('小人Count').textContent = this.persons.length;
             },
 
-            _escape(str) {
-                if (!str) return '';
-                const div = document.createElement('div');
-                div.textContent = str;
-                return div.innerHTML;
-            },
-
             // ---- 业务操作 ----
             async submitProject(e) {
                 e.preventDefault();
@@ -1451,6 +1308,7 @@
                 }
                 try {
                     await Store.addProject({ name, startDate, endDate, requirements });
+                    await this.syncData();
                     hideModal('projectModal');
                     document.getElementById('projectForm').reset();
                     toast('✅ 项目发布成功！', 'success');
@@ -1464,6 +1322,7 @@
                 if (!confirm('确定删除这个项目吗？')) return;
                 try {
                     await Store.deleteProject(id);
+                    await this.syncData();
                     toast('已删除项目', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
@@ -1483,6 +1342,7 @@
                 }
                 try {
                     await Store.addPerson({ name });
+                    await this.syncData();
                     input.value = '';
                     toast('✅ 已添加小人', 'success');
                 } catch (err) {
@@ -1503,6 +1363,7 @@
                 }
                 try {
                     await Store.updatePerson(id, { name: newName });
+                    await this.syncData();
                     toast('已更新名称', 'success');
                 } catch (err) {
                     toast('更新失败', 'error');
@@ -1513,6 +1374,7 @@
                 if (!confirm('确定删除这个小人和相关任务吗？')) return;
                 try {
                     await Store.deletePerson(id);
+                    await this.syncData();
                     toast('已删除小人', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
@@ -1536,6 +1398,7 @@
                 }
                 try {
                     await Store.addTask({ fromPersonId, toPersonId, content, deadline });
+                    await this.syncData();
                     hideModal('taskModal');
                     document.getElementById('taskForm').reset();
                     toast('✅ 任务已发送！', 'success');
@@ -1560,6 +1423,7 @@
             async completeTask(id) {
                 try {
                     await Store.updateTask(id, { status: '已完成' });
+                    await this.syncData();
                     toast('✅ 任务已完成！', 'success');
                 } catch (err) {
                     toast('操作失败', 'error');
@@ -1570,6 +1434,7 @@
                 if (!confirm('确定删除这个任务吗？')) return;
                 try {
                     await Store.updateTask(id, { status: '已删除' });
+                    await this.syncData();
                     toast('已删除任务', 'success');
                 } catch (err) {
                     toast('删除失败', 'error');
@@ -1614,7 +1479,7 @@
         window.toast = toast;
 
         document.addEventListener('DOMContentLoaded', () => App.init());
-        console.log('🚀 任务平台已启动 (使用 Firestore add() 彻底避免覆盖)');
+        console.log('🚀 任务平台已启动 (YesApi 果创云版)');
     </script>
 </body>
 </html>
